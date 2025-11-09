@@ -1,7 +1,7 @@
-// -------------------- IMPORTS --------------------
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
+import fetch from 'node-fetch';
 import {
   Client,
   GatewayIntentBits,
@@ -11,12 +11,18 @@ import {
   ButtonBuilder,
   ButtonStyle,
   StringSelectMenuBuilder,
-  Events
+  Events,
+  PermissionFlagsBits,
+  ChannelType
 } from 'discord.js';
 
-// -------------------- CLIENT --------------------
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages
+  ],
   partials: [Partials.Channel]
 });
 
@@ -53,37 +59,45 @@ const config = {
 // -------------------- STORAGE --------------------
 const dataFile = path.join('./ticketData.json');
 let ticketData = { ticketCounter: 1, pausedCategories: {}, pausedSubtopics: {}, activeTickets: {} };
-if (fs.existsSync(dataFile)) {
-  ticketData = JSON.parse(fs.readFileSync(dataFile));
-}
-function saveData() {
-  fs.writeFileSync(dataFile, JSON.stringify(ticketData, null, 2));
-}
+if (fs.existsSync(dataFile)) ticketData = JSON.parse(fs.readFileSync(dataFile));
+function saveData() { fs.writeFileSync(dataFile, JSON.stringify(ticketData, null, 2)); }
 
 // -------------------- HELPERS --------------------
-async function createTicketChannel(creator, categoryId, categoryName, subtopic, roleToPing) {
+async function getRobloxInfo(discordId) {
+  try {
+    const res = await fetch(`https://api.blox.link/v1/user/${discordId}`);
+    const data = await res.json();
+    if(data.status === "ok") return { username: data.username, headshot: data.avatarUrl };
+    return { username: "Unknown", headshot: "https://cdn.discordapp.com/embed/avatars/0.png" };
+  } catch { return { username: "Unknown", headshot: "https://cdn.discordapp.com/embed/avatars/0.png" }; }
+}
+
+async function createTicketChannel(user, categoryId, categoryName, subtopic, roleToPing) {
   const guild = client.guilds.cache.get(config.guildId);
-  const channelName = `${creator.username.toLowerCase()}-${ticketData.ticketCounter.toString().padStart(4, '0')}`;
+  const channelName = `${user.username.toLowerCase()}-${ticketData.ticketCounter.toString().padStart(4,'0')}`;
   const everyone = guild.roles.everyone;
 
   const channel = await guild.channels.create({
     name: channelName,
-    type: 0, // GUILD_TEXT
+    type: ChannelType.GuildText,
     parent: categoryId,
     permissionOverwrites: [
-      { id: everyone.id, deny: ['ViewChannel'] },
-      { id: creator.id, allow: ['ViewChannel','SendMessages','ReadMessageHistory'] },
-      { id: config.roles.special, allow: ['ViewChannel','SendMessages','ReadMessageHistory'] },
-      ...(roleToPing ? [{ id: roleToPing, allow: ['ViewChannel','SendMessages','ReadMessageHistory'] }] : [])
+      { id: everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+      { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+      { id: config.roles.special, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+      ...(roleToPing ? [{ id: roleToPing, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }] : [])
     ]
   });
 
+  const robloxInfo = await getRobloxInfo(user.id);
+
   ticketData.activeTickets[channel.id] = {
     channelId: channel.id,
-    creatorId: creator.id,
+    creatorId: user.id,
     category: categoryName,
     subtopic: subtopic,
-    claimedBy: null
+    claimedBy: null,
+    messages: []
   };
   ticketData.ticketCounter++;
   saveData();
@@ -92,11 +106,11 @@ async function createTicketChannel(creator, categoryId, categoryName, subtopic, 
     .setTitle(`Ticket - ${categoryName}`)
     .setDescription(`Thank you for opening a ticket with Adalea Support! A member of the ${categoryName} team will be with you shortly.`)
     .addFields([
-      { name: 'User', value: `${creator.tag} / Fetching Roblox...` },
+      { name: 'User', value: `${user.tag} / ${robloxInfo.username}` },
       { name: 'Subtopic', value: subtopic },
       { name: 'Date', value: new Date().toLocaleString() }
     ])
-    .setThumbnail('https://cdn.discordapp.com/embed/avatars/0.png')
+    .setThumbnail(robloxInfo.headshot)
     .setImage(config.supportImage)
     .setColor(0xFFA500);
 
@@ -112,9 +126,9 @@ async function createTicketChannel(creator, categoryId, categoryName, subtopic, 
 
 // -------------------- SUPPORT PANEL --------------------
 client.on('messageCreate', async message => {
-  if (message.author.bot) return;
-  if (message.content.toLowerCase() === '!supportpanel') {
-    if (![config.roles.leadership, config.roles.special].some(r => message.member.roles.cache.has(r))) return;
+  if(message.author.bot) return;
+  if(message.content.toLowerCase() === '!supportpanel'){
+    if(![config.roles.leadership, config.roles.special].some(r => message.member.roles.cache.has(r))) return;
     await message.delete();
 
     const embed = new EmbedBuilder()
@@ -140,17 +154,34 @@ Once you select a category, you will have the opportunity to provide more detail
   }
 });
 
-// -------------------- INTERACTIONS --------------------
+// -------------------- BUTTON INTERACTIONS --------------------
 client.on(Events.InteractionCreate, async interaction => {
-  if (interaction.isButton()) {
+  if(interaction.isButton()){
     const id = interaction.customId;
-    if (ticketData.pausedCategories[id]) return interaction.reply({ content: '<a:Zcheck:1437064263570292906> Sorry, this category is paused.', ephemeral: true });
+    if(ticketData.pausedCategories[id]) return interaction.reply({ content: '<a:Zcheck:1437064263570292906> This category is paused.', ephemeral: true });
 
-    if (id === 'general') {
-      await createTicketChannel(interaction.user, config.categories.general, 'Support Team', 'General', config.roles.support);
+    const roleMap = {
+      general: config.roles.support,
+      pr: config.roles.pr,
+      sm: config.roles.sm,
+      mod: config.roles.mod,
+      leadership: config.roles.leadership
+    };
+
+    const catMap = {
+      general: 'Support Team',
+      pr: 'Public Relations Team',
+      sm: 'Staff Management Team',
+      mod: 'Moderation Team',
+      leadership: 'Leadership Team'
+    };
+
+    if(id === 'general'){
+      await createTicketChannel(interaction.user, config.categories.general, catMap.general, 'General', roleMap.general);
       return interaction.reply({ content: 'Your ticket has been created!', ephemeral: true });
     } else {
-      return interaction.reply({ content: 'Dropdowns and other categories not yet implemented', ephemeral: true });
+      // Other categories: open dropdown for subtopics
+      return interaction.reply({ content: 'Dropdown for this category coming soon', ephemeral: true });
     }
   }
 });
