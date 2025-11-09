@@ -1,7 +1,7 @@
 {
   "name": "adalea-support-bot",
   "version": "1.0.0",
-  "description": "Full-featured Adalea Support Bot for Adalea",
+  "description": "Full-featured Adalea Support Bot",
   "main": "index.js",
   "type": "module",
   "scripts": {
