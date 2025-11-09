@@ -1,7 +1,6 @@
 /**
- * Adalea Support Bot - final working version
- * Works with Node 18+/22+, ES modules
- * Keep all embeds, buttons, emojis, modals, transcripts, and Bloxlink
+ * Adalea Support Bot - final
+ * Includes Express server to satisfy Render open port requirement
  */
 
 import 'dotenv/config';
@@ -9,6 +8,7 @@ import fs from 'fs';
 import path from 'path';
 import fetch from 'node-fetch';
 import FormData from 'form-data';
+import express from 'express';
 import {
   Client,
   GatewayIntentBits,
@@ -29,12 +29,20 @@ import {
   AttachmentBuilder
 } from 'discord.js';
 
+// ---------------- ENV ----------------
 const BOT_TOKEN = process.env.BOT_TOKEN_1;
 if (!BOT_TOKEN) {
   console.error('Missing BOT_TOKEN_1 environment variable.');
   process.exit(1);
 }
 
+// ---------------- EXPRESS SERVER ----------------
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.get('/', (req, res) => res.send('Adalea Support Bot is online!'));
+app.listen(PORT, () => console.log(`Express server running on port ${PORT}`));
+
+// ---------------- DISCORD CLIENT ----------------
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -78,28 +86,17 @@ const DEPARTMENTS = {
   leadership: { label: 'Leadership', role: CONFIG.roles.leadership, subtopics: ['Report an Executive', 'Developer Portfolios', 'Other'] }
 };
 
-// ---------------- DATA ----------------
+// ---------------- DATA FILE ----------------
 const DATA_PATH = path.join(process.cwd(), 'ticketData.json');
 let ticketData = { ticketCounter: 1, pausedCategories: {}, pausedSubtopics: {}, activeTickets: {} };
-
 function ensureData() {
   if (!fs.existsSync(DATA_PATH)) fs.writeFileSync(DATA_PATH, JSON.stringify(ticketData, null, 2));
   else {
-    try {
-      const raw = fs.readFileSync(DATA_PATH, 'utf8');
-      ticketData = JSON.parse(raw);
-      ticketData.ticketCounter ||= 1;
-      ticketData.pausedCategories ||= {};
-      ticketData.pausedSubtopics ||= {};
-      ticketData.activeTickets ||= {};
-    } catch {
-      fs.writeFileSync(DATA_PATH, JSON.stringify(ticketData, null, 2));
-    }
+    try { ticketData = JSON.parse(fs.readFileSync(DATA_PATH, 'utf8')); } 
+    catch { fs.writeFileSync(DATA_PATH, JSON.stringify(ticketData, null, 2)); }
   }
 }
-function saveData() {
-  fs.writeFileSync(DATA_PATH, JSON.stringify(ticketData, null, 2));
-}
+function saveData() { fs.writeFileSync(DATA_PATH, JSON.stringify(ticketData, null, 2)); }
 ensureData();
 for (const key of Object.keys(DEPARTMENTS)) if (ticketData.pausedCategories[key] === undefined) ticketData.pausedCategories[key] = false;
 saveData();
@@ -108,57 +105,47 @@ saveData();
 async function fetchRobloxForDiscordUser(discordId) {
   try {
     const res = await fetch(`https://v3.blox.link/developer/discord/${discordId}`);
-    if (!res.ok) throw new Error('Bloxlink fetch failed');
-    const data = await res.json();
-    if (data?.username) return { username: data.username, headshot: data.avatarUrl || `https://www.roblox.com/headshot-thumbnail/image?userId=${data.userId}&width=420&height=420&format=png` };
-    const r1 = await fetch(`https://api.blox.link/v1/user/${discordId}`);
-    if (r1.ok) {
-      const d1 = await r1.json();
-      if (d1?.status === 'ok') return { username: d1.username, headshot: d1.avatarUrl || `https://www.roblox.com/headshot-thumbnail/image?userId=${d1.id}&width=420&height=420&format=png` };
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.username) return { username: data.username, headshot: data.avatarUrl || `https://www.roblox.com/headshot-thumbnail/image?userId=${data.userId}&width=420&height=420&format=png` };
     }
+    const r1 = await fetch(`https://api.blox.link/v1/user/${discordId}`);
+    if (r1.ok) { const d1 = await r1.json(); if (d1.status === 'ok') return { username: d1.username, headshot: d1.avatarUrl || `https://www.roblox.com/headshot-thumbnail/image?userId=${d1.id}&width=420&height=420&format=png` }; }
   } catch {}
   return { username: 'Unknown', headshot: 'https://cdn.discordapp.com/embed/avatars/0.png' };
 }
 
+// ---------------- EXPORT/BUILD EMBEDS ----------------
 function buildSupportPanelEmbed() {
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle('<:verified:1406645489381806090> Adalea Support Panel')
-    .setDescription(
-`Welcome to Adalea's Support Panel! This channel is designed to help you connect with the right team efficiently. Please select the category that best fits your needs before opening a ticket: Staff Management, Public Relations, Moderation, General, or Leadership. Choosing the correct category ensures your request is directed to the team most capable of assisting you quickly and effectively.
-
-Once you select a category, you will have the opportunity to provide more details about your issue so that the appropriate team can respond accurately. We value your patience, respect, and collaboration while we work to resolve your concerns. Our goal is to provide clear and timely support to everyone in the Adalea community.`
-    )
-    .setImage(CONFIG.supportImage)
-    .setColor(0xFFA500);
+    .setDescription(`Welcome to Adalea's Support Panel! Select the category that best fits your needs.`)
+    .setImage(CONFIG.supportImage).setColor(0xFFA500);
+  return embed;
 }
-
 function buildSupportButtons() {
-  return new ActionRowBuilder().addComponents(
+  const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('panel_general').setLabel('General').setEmoji(CONFIG.emojis.general).setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('panel_pr').setLabel('Public Relations').setEmoji(CONFIG.emojis.pr).setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('panel_sm').setLabel('Staff Management').setEmoji(CONFIG.emojis.sm).setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('panel_mod').setLabel('Moderation').setEmoji(CONFIG.emojis.mod).setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('panel_leadership').setLabel('Leadership').setEmoji(CONFIG.emojis.leadership).setStyle(ButtonStyle.Success)
   );
+  return row;
 }
-
 function buildSubtopicMenu(deptKey) {
   const dept = DEPARTMENTS[deptKey];
-  return new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId(`subtopic_${deptKey}`)
-      .setPlaceholder('Select a subtopic...')
-      .setMinValues(1)
-      .setMaxValues(1)
-      .addOptions(dept.subtopics.map((s, i) => ({ label: s, value: `${deptKey}::${i}` })))
-  );
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`subtopic_${deptKey}`).setPlaceholder('Select a subtopic...').setMinValues(1).setMaxValues(1)
+    .addOptions(dept.subtopics.map((s,i)=>({label:s,value:`${deptKey}::${i}`})));
+  return new ActionRowBuilder().addComponents(menu);
 }
 
+// ---------------- TICKETS ----------------
 async function createTicket(creator, deptKey, subtopicLabel) {
-  const guild = client.guilds.cache.get(CONFIG.guildId);
-  if (!guild) throw new Error('Guild not cached');
+  const guild = client.guilds.cache.get(CONFIG.guildId); if(!guild) throw new Error('Guild not cached');
   const dept = DEPARTMENTS[deptKey];
-  const channelName = `${creator.username.toLowerCase().replace(/[^a-z0-9-_]/g, '')}-${String(ticketData.ticketCounter).padStart(4,'0')}`;
+  const channelName = `${creator.username.toLowerCase().replace(/[^a-z0-9-_]/g,'')}-${String(ticketData.ticketCounter).padStart(4,'0')}`;
   const everyone = guild.roles.everyone;
   const overwrites = [
     { id: everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
@@ -167,82 +154,59 @@ async function createTicket(creator, deptKey, subtopicLabel) {
     { id: CONFIG.roles.leadership, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
     { id: CONFIG.roles.specialUser, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
   ];
-
-  const channel = await guild.channels.create({
-    name: channelName,
-    type: ChannelType.GuildText,
-    parent: CONFIG.ticketCategoryId,
-    permissionOverwrites: overwrites
-  });
-
+  const channel = await guild.channels.create({ name: channelName, type: ChannelType.GuildText, parent: CONFIG.ticketCategoryId, permissionOverwrites: overwrites });
   const roblox = await fetchRobloxForDiscordUser(creator.id);
-
-  ticketData.activeTickets[channel.id] = {
-    channelId: channel.id,
-    creatorId: creator.id,
-    department: deptKey,
-    subtopic: subtopicLabel,
-    createdAt: new Date().toISOString(),
-    claimedBy: null
-  };
-  ticketData.ticketCounter++;
-  saveData();
-
-  const ping = deptKey === 'leadership' ? `<@&${CONFIG.roles.leadership}>` : `<@&${dept.role}>`;
-  const embed = new EmbedBuilder()
-    .setTitle(`Ticket - ${dept.label}`)
-    .setDescription(`**Why did you open this ticket?**\n${subtopicLabel}\n\nThank you for opening a ticket with Adalea Support. A member of the ${dept.label} will be with you shortly.`)
-    .addFields({ name: 'Username', value: `${creator.tag} / ${roblox.username}`, inline: true }, { name: 'Date', value: new Date().toLocaleString(), inline: true })
-    .setThumbnail(roblox.headshot)
-    .setColor(0xFFA500)
-    .setFooter({ text: `${creator.username} • ${dept.label}` });
-
+  ticketData.activeTickets[channel.id] = { channelId: channel.id, creatorId: creator.id, department: deptKey, subtopic: subtopicLabel, createdAt: new Date().toISOString(), claimedBy: null };
+  ticketData.ticketCounter++; saveData();
+  const ping = deptKey==='leadership'?`<@&${CONFIG.roles.leadership}>`:`<@&${dept.role}>`;
+  const embed = new EmbedBuilder().setTitle(`Ticket - ${dept.label}`).setDescription(`**Why did you open this ticket?**\n${subtopicLabel}\nThank you!`).addFields(
+    { name:'Username', value:`${creator.tag} / ${roblox.username}`, inline:true },
+    { name:'Date', value:new Date().toLocaleString(), inline:true }
+  ).setThumbnail(roblox.headshot).setColor(0xFFA500).setFooter({text:`${creator.username} • ${dept.label}`});
   const buttons = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('ticket_claim').setLabel('Claim').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('ticket_close').setLabel('Close with reason').setStyle(ButtonStyle.Danger)
   );
-
   await channel.send({ content: ping, embeds: [embed], components: [buttons] });
   return channel;
 }
 
+// ---------------- COMPILE TRANSCRIPT ----------------
 async function compileTranscript(channel) {
-  let all = [];
+  const lines = [`Transcript for #${channel.name}`, `Channel ID: ${channel.id}`, `Generated: ${new Date().toLocaleString()}`, '----------------------------------------'];
   let before;
-  while (true) {
-    const options = { limit: 100 };
-    if (before) options.before = before;
-    const msgs = await channel.messages.fetch(options);
-    if (!msgs.size) break;
-    msgs.forEach(m => all.push(m));
-    before = all[all.length - 1].id;
-    if (msgs.size < 100) break;
-  }
-  all = all.sort((a,b) => a.createdTimestamp - b.createdTimestamp);
-  const lines = [`Transcript for #${channel.name}`, `Channel ID: ${channel.id}`, `Generated: ${new Date().toLocaleString()}`, '--------------------------'];
-  for (const m of all) {
-    const author = `${m.author.tag} (${m.author.id})`;
-    const time = new Date(m.createdTimestamp).toLocaleString();
-    lines.push(`[${time}] ${author}: ${m.content || ''}`);
-    if (m.attachments.size) m.attachments.forEach(att => lines.push(`    [attachment] ${att.url}`));
+  while(true) {
+    const options = { limit: 100 }; if(before) options.before = before;
+    const batch = await channel.messages.fetch(options);
+    if(!batch.size) break;
+    const batchArr = Array.from(batch.values()).sort((a,b)=>a.createdTimestamp-b.createdTimestamp);
+    for(const m of batchArr){
+      const time=new Date(m.createdTimestamp).toLocaleString();
+      const author=`${m.author.tag} (${m.author.id})`;
+      lines.push(`[${time}] ${author}: ${m.content}`);
+      if(m.attachments.size) m.attachments.forEach(att=>lines.push(`           [attachment] ${att.url}`));
+    }
+    before=batchArr[0].id;
+    if(batch.size<100) break;
   }
   return lines.join('\n');
 }
 
-// ---------------- CLIENT ----------------
-client.once(Events.ClientReady, async () => {
+// ---------------- CLIENT READY ----------------
+client.once(Events.ClientReady, async ()=>{
   console.log(`Logged in as ${client.user.tag}`);
-  try {
-    const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-    await rest.put(Routes.applicationGuildCommands(client.user.id, CONFIG.guildId), { body: [
-      { name: 'add', description: 'Add a user to this ticket (staff only)', options: [{ name: 'user', description: 'User to add', required: true, type: 6 }] },
-      { name: 'remove', description: 'Remove a user from this ticket (staff only)', options: [{ name: 'user', description: 'User to remove', required: true, type: 6 }] },
-      { name: 'move', description: 'Move ticket to another department (staff only)', options: [{ name: 'department', description: 'Department key', required: true, type: 3 }] }
-    ]});
+  // Slash commands registration
+  try{
+    const rest = new REST({version:'10'}).setToken(BOT_TOKEN);
+    const commands=[
+      { name:'add', description:'Add a user to this ticket', options:[{name:'user',description:'User to add',required:true,type:6}] },
+      { name:'remove', description:'Remove a user from this ticket', options:[{name:'user',description:'User to remove',required:true,type:6}] },
+      { name:'move', description:'Move ticket to another department', options:[{name:'department',description:'Department key (general/pr/sm/mod/leadership)',required:true,type:3}] }
+    ];
+    await rest.put(Routes.applicationGuildCommands(client.user.id,CONFIG.guildId), {body:commands});
     console.log('Slash commands registered.');
-  } catch (e) { console.error('Failed to register slash commands', e); }
+  } catch(e){ console.error('Failed to register slash commands', e); }
 });
 
 // ---------------- LOGIN ----------------
 client.login(BOT_TOKEN).catch(err => { console.error('Failed to login:', err); process.exit(1); });
-
