@@ -1,12 +1,15 @@
 {
-  "ticketCounter": 1,
-  "pausedCategories": {
-    "general": false,
-    "pr": false,
-    "sm": false,
-    "mod": false,
-    "leadership": false
+  "name": "adalea-support-bot",
+  "version": "1.0.0",
+  "description": "Full-featured Adalea Support Bot for Adalea",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
   },
-  "pausedSubtopics": {},
-  "activeTickets": {}
+  "dependencies": {
+    "discord.js": "^14.16.0",
+    "dotenv": "^16.3.1",
+    "node-fetch": "^3.3.2"
+  }
 }
