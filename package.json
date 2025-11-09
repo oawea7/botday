@@ -1,17 +1,19 @@
 {
   "name": "adalea-support-bot",
   "version": "1.0.0",
-  "description": "Adalea Support Bot - final",
-  "main": "index.js",
+  "description": "Adalea Discord Support Bot",
   "type": "module",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "^14.16.0",
+    "discord.js": "^14.13.0",
     "dotenv": "^16.3.1",
-    "node-fetch": "^3.3.2",
-    "form-data": "^4.0.0"
+    "form-data": "^4.0.0",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
-
