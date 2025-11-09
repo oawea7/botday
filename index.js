@@ -7,6 +7,7 @@ config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+app.get('/', (req, res) => res.send('Bot is running.'));
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 // --- CONFIG ---
@@ -54,34 +55,37 @@ function saveTicketData() {
     fs.writeFileSync(ticketDataPath, JSON.stringify(ticketData, null, 2));
 }
 
-function createTicketEmbed(user) {
-    return new EmbedBuilder()
-        .setTitle('🎫 Ticket Panel')
-        .setDescription('Click a button below to open a ticket.')
+function createSupportPanel(user) {
+    const embed = new EmbedBuilder()
+        .setTitle('🎫 Support Panel')
+        .setDescription(
+            `${CONFIG.emojis.general} **General Support**\n` +
+            `${CONFIG.emojis.pr} **Public Relations**\n` +
+            `${CONFIG.emojis.sm} **Staff Management**\n` +
+            `${CONFIG.emojis.mod} **Moderation**\n` +
+            `${CONFIG.emojis.leadership} **Leadership**\n\n` +
+            `Click a button below to open a ticket.`
+        )
         .setColor('#00FFFF')
         .setImage(CONFIG.supportImage)
         .setFooter({ text: `Requested by ${user.tag}`, iconURL: user.displayAvatarURL() });
-}
 
-function createTicketButtons() {
-    return new ActionRowBuilder().addComponents(
+    const buttons = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('ticket_pr').setLabel('Public Relations').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('ticket_sm').setLabel('Staff Management').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('ticket_mod').setLabel('Moderation').setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('ticket_leadership').setLabel('Leadership').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('ticket_general').setLabel('General Support').setStyle(ButtonStyle.Success)
     );
+
+    return { embed, buttons };
 }
 
 // --- EVENTS ---
-client.on(Events.ClientReady, () => {
-    console.log(`Logged in as ${client.user.tag}`);
-});
+client.on(Events.ClientReady, () => console.log(`Logged in as ${client.user.tag}`));
 
-// Handle ticket button clicks
 client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isButton()) return;
-
     const { customId, user, guild } = interaction;
     if (guild.id !== CONFIG.guildId) return;
 
@@ -92,42 +96,62 @@ client.on(Events.InteractionCreate, async interaction => {
         ticket_leadership: 'leadership',
         ticket_general: 'support'
     };
-
     const type = typeMap[customId];
     if (!type) return;
 
-    // Create ticket channel
+    // Permission logic
+    const overwrites = [
+        { id: guild.roles.everyone, deny: ['ViewChannel'] },
+        { id: user.id, allow: ['ViewChannel', 'SendMessages', 'AttachFiles', 'ReadMessageHistory'] }
+    ];
+    if (type !== 'support') overwrites.push({ id: CONFIG.roles[type], allow: ['ViewChannel', 'SendMessages', 'ManageChannels', 'ReadMessageHistory'] });
+
     const channel = await guild.channels.create({
         name: `ticket-${ticketData.ticketCounter}`,
-        type: 0, // GUILD_TEXT
+        type: 0,
         parent: CONFIG.ticketCategoryId,
-        permissionOverwrites: [
-            { id: guild.roles.everyone, deny: ['ViewChannel'] },
-            { id: user.id, allow: ['ViewChannel', 'SendMessages', 'AttachFiles', 'ReadMessageHistory'] },
-            { id: CONFIG.roles[type], allow: ['ViewChannel', 'SendMessages', 'ManageChannels', 'ReadMessageHistory'] }
-        ]
+        permissionOverwrites: overwrites
     });
 
     ticketData.activeTickets[channel.id] = { userId: user.id, type, createdAt: Date.now() };
     ticketData.ticketCounter++;
     saveTicketData();
 
-    const embed = new EmbedBuilder()
+    const ticketEmbed = new EmbedBuilder()
         .setTitle(`🎫 ${interaction.component.label} Ticket`)
         .setDescription(`Hello ${user}, a staff member will be with you shortly.`)
         .setColor('#00FFFF');
 
-    await channel.send({ content: `<@${user.id}>`, embeds: [embed] });
+    await channel.send({ content: `<@${user.id}>`, embeds: [ticketEmbed] });
     await interaction.reply({ content: `Ticket created: <#${channel.id}>`, ephemeral: true });
 });
 
-// Handle prefix commands
+// --- PREFIX COMMANDS ---
 client.on(Events.MessageCreate, async message => {
-    if (message.author.bot) return;
-    if (!message.content.startsWith('?')) return;
-
+    if (message.author.bot || !message.content.startsWith('?')) return;
     const args = message.content.slice(1).split(/ +/);
     const command = args.shift().toLowerCase();
+
+    if (command === 'supportpanel') {
+        const { embed, buttons } = createSupportPanel(message.author);
+        return message.channel.send({ embeds: [embed], components: [buttons] });
+    }
+
+    if (command === 'stopcat' || command === 'startcat') {
+        const cat = args[0];
+        if (!cat) return message.reply('Please provide a category.');
+        ticketData.pausedCategories[cat] = command === 'stopcat';
+        saveTicketData();
+        return message.reply(`${cat} category ${command === 'stopcat' ? 'paused' : 'resumed'}.`);
+    }
+
+    if (command === 'stop' || command === 'start') {
+        const sub = args[0];
+        if (!sub) return message.reply('Please provide a subheader.');
+        ticketData.pausedSubtopics[sub] = command === 'stop';
+        saveTicketData();
+        return message.reply(`${sub} ${command === 'stop' ? 'paused' : 'resumed'}.`);
+    }
 
     if (command === 'close') {
         const ticket = ticketData.activeTickets[message.channel.id];
@@ -143,8 +167,6 @@ client.on(Events.MessageCreate, async message => {
     }
 });
 
-// --- DEPLOY ---
-client.login(process.env.TOKEN);
+// --- LOGIN ---
+client.login(process.env.BOT_TOKEN_1);
 
-// -------------------- LOGIN --------------------
-client.login(BOT_TOKEN_1).then(() => console.log('Bot is ready!')).catch(console.error);
