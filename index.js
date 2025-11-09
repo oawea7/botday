@@ -147,4 +147,4 @@ client.on(Events.MessageCreate, async message => {
 client.login(process.env.TOKEN);
 
 // -------------------- LOGIN --------------------
-client.login(BOT_TOKEN).then(() => console.log('Bot is ready!')).catch(console.error);
+client.login(BOT_TOKEN_1).then(() => console.log('Bot is ready!')).catch(console.error);
