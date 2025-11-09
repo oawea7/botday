@@ -1,6 +1,7 @@
 import fs from 'fs';
 import express from 'express';
-import { Client, GatewayIntentBits, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, Events, ChannelType } from 'discord.js';
+import fetch from 'node-fetch';
+import { Client, GatewayIntentBits, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, Events } from 'discord.js';
 import { config } from 'dotenv';
 
 config();
@@ -54,16 +55,20 @@ function saveTicketData() {
     fs.writeFileSync(ticketDataPath, JSON.stringify(ticketData, null, 2));
 }
 
-// --- PANEL EMBED & BUTTONS ---
-function createSupportPanelEmbed() {
-    return new EmbedBuilder()
-        .setTitle('🎫 Support Panel')
-        .setDescription('Click a button below to open a ticket in the category you need help with.')
-        .setColor('#00FFFF')
-        .setImage(CONFIG.supportImage);
+async function getRobloxHeadshot(discordId) {
+    try {
+        const res = await fetch(`https://api.blox.link/v1/user/${discordId}`);
+        const data = await res.json();
+        if (!data.primaryAccount || !data.primaryAccount.id) return null;
+        const robloxId = data.primaryAccount.id;
+        return `https://www.roblox.com/headshot-thumbnail/image?userId=${robloxId}&width=150&height=150&format=png`;
+    } catch {
+        return null;
+    }
 }
 
-function createSupportPanelButtons() {
+// Create ticket buttons with emojis
+function createTicketButtons() {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('ticket_pr').setLabel(`${CONFIG.emojis.pr} Public Relations`).setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('ticket_sm').setLabel(`${CONFIG.emojis.sm} Staff Management`).setStyle(ButtonStyle.Primary),
@@ -76,10 +81,11 @@ function createSupportPanelButtons() {
 // --- EVENTS ---
 client.on(Events.ClientReady, () => console.log(`Logged in as ${client.user.tag}`));
 
-// Handle support panel button interactions
+// Handle ticket button interactions
 client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isButton()) return;
-    if (interaction.guild.id !== CONFIG.guildId) return;
+    const { customId, user, guild } = interaction;
+    if (guild.id !== CONFIG.guildId) return;
 
     const typeMap = {
         ticket_pr: 'pr',
@@ -88,119 +94,131 @@ client.on(Events.InteractionCreate, async interaction => {
         ticket_leadership: 'leadership',
         ticket_general: 'support'
     };
-    const type = typeMap[interaction.customId];
+    const type = typeMap[customId];
     if (!type) return;
 
-    // Check if category or subtopic is paused
-    if (ticketData.pausedCategories[type] || ticketData.pausedSubtopics[type]) {
-        return interaction.reply({ content: `This category is currently paused.`, ephemeral: true });
-    }
-
     // Create ticket channel
-    const channel = await interaction.guild.channels.create({
+    const channel = await guild.channels.create({
         name: `ticket-${ticketData.ticketCounter}`,
-        type: ChannelType.GuildText,
+        type: 0,
         parent: CONFIG.ticketCategoryId,
         permissionOverwrites: [
-            { id: interaction.guild.roles.everyone, deny: ['ViewChannel'] },
-            { id: interaction.user.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'AttachFiles'] },
+            { id: guild.roles.everyone, deny: ['ViewChannel'] },
+            { id: user.id, allow: ['ViewChannel', 'SendMessages', 'AttachFiles', 'ReadMessageHistory'] },
             { id: CONFIG.roles[type], allow: ['ViewChannel', 'SendMessages', 'ManageChannels', 'ReadMessageHistory'] }
         ]
     });
 
-    ticketData.activeTickets[channel.id] = { userId: interaction.user.id, type, claimedBy: null, createdAt: Date.now() };
+    ticketData.activeTickets[channel.id] = { userId: user.id, type, createdAt: Date.now() };
     ticketData.ticketCounter++;
     saveTicketData();
 
-    // Send ticket embed with claim & close buttons
-    const ticketEmbed = new EmbedBuilder()
+    const robloxHeadshot = await getRobloxHeadshot(user.id);
+
+    const embed = new EmbedBuilder()
         .setTitle(`🎫 ${interaction.component.label} Ticket`)
-        .setDescription(`Hello <@${interaction.user.id}>, a staff member will be with you shortly.`)
-        .setColor('#00FFFF');
+        .setDescription(`Hello ${user}, a staff member will be with you shortly.`)
+        .setColor('#00FFFF')
+        .setImage(CONFIG.supportImage)
+        .setThumbnail(robloxHeadshot || user.displayAvatarURL())
+        .setFooter({ text: 'Adalea Bots' });
 
     const ticketButtons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim Ticket').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('close_ticket').setLabel('Close Ticket').setStyle(ButtonStyle.Danger)
     );
 
-    await channel.send({ content: `<@${interaction.user.id}>`, embeds: [ticketEmbed], components: [ticketButtons] });
+    await channel.send({ content: `<@${user.id}>`, embeds: [embed], components: [ticketButtons] });
     await interaction.reply({ content: `Ticket created: <#${channel.id}>`, ephemeral: true });
 });
 
-// Handle ticket claim & close buttons
+// Handle claim & close buttons
 client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isButton()) return;
-    const ticket = ticketData.activeTickets[interaction.channel.id];
-    if (!ticket) return;
+    const { customId, channel, user } = interaction;
 
-    const staffRoles = Object.values(CONFIG.roles);
-    if (!interaction.member.roles.cache.some(r => staffRoles.includes(r.id))) return interaction.reply({ content: 'Only staff can use this button.', ephemeral: true });
+    const ticket = ticketData.activeTickets[channel.id];
+    if (!ticket) return interaction.reply({ content: 'Not a ticket channel.', ephemeral: true });
 
-    if (interaction.customId === 'claim_ticket') {
-        ticket.claimedBy = interaction.user.id;
-        saveTicketData();
-        return interaction.reply({ content: `Ticket claimed by <@${interaction.user.id}>`, ephemeral: true });
+    if (customId === 'claim_ticket') {
+        await channel.send({ content: `${user} will be handling this ticket!` });
     }
 
-    if (interaction.customId === 'close_ticket') {
+    if (customId === 'close_ticket') {
         const transcriptChannel = await client.channels.fetch(CONFIG.transcriptsChannelId);
-        const transcript = `Ticket by <@${ticket.userId}> (Type: ${ticket.type})\nClaimed by: ${ticket.claimedBy ? `<@${ticket.claimedBy}>` : 'Unclaimed'}\nClosed at: ${new Date().toLocaleString()}`;
-        await transcriptChannel.send({ content: transcript });
+        const transcriptFile = `Ticket by <@${ticket.userId}> closed at ${new Date().toLocaleString()}`;
+        const transcriptTxtPath = `./transcripts/ticket-${channel.id}.txt`;
 
-        delete ticketData.activeTickets[interaction.channel.id];
+        fs.mkdirSync('./transcripts', { recursive: true });
+        fs.writeFileSync(transcriptTxtPath, transcriptFile);
+
+        const embed = new EmbedBuilder()
+            .setTitle('Ticket Transcript')
+            .setDescription(`Ticket by <@${ticket.userId}>\nCategory: ${ticket.type}\nCreated At: ${new Date(ticket.createdAt).toLocaleString()}\nClosed By: ${user.tag}`)
+            .setColor('#00FFFF')
+            .setFooter({ text: 'Adalea Bots' });
+
+        await transcriptChannel.send({ embeds: [embed], files: [transcriptTxtPath] });
+
+        delete ticketData.activeTickets[channel.id];
         saveTicketData();
-        return interaction.channel.delete();
+        await channel.delete();
     }
 });
 
-// Handle prefix commands
+// Handle prefix commands: ?supportpanel, ?startcat, ?stopcat, ?start, ?stop
 client.on(Events.MessageCreate, async message => {
     if (message.author.bot) return;
     if (!message.content.startsWith('?')) return;
 
-    const args = message.content.slice(1).trim().split(/ +/);
+    const args = message.content.slice(1).split(/ +/);
     const command = args.shift().toLowerCase();
 
-    // Support panel
+    // support panel
     if (command === 'supportpanel') {
-        const embed = createSupportPanelEmbed();
-        const buttons = createSupportPanelButtons();
-        return message.channel.send({ embeds: [embed], components: [buttons] });
+        const embed = new EmbedBuilder()
+            .setTitle('🎫 Support Panel')
+            .setDescription('Click a button below to open a ticket.')
+            .setColor('#00FFFF')
+            .setImage(CONFIG.supportImage);
+
+        await message.channel.send({ embeds: [embed], components: [createTicketButtons()] });
     }
 
-    // Category/subtopic pause/resume
+    // category/subtopic start & stop commands
     if (command === 'stopcat') {
         const cat = args[0];
-        if (!cat) return message.reply('Specify category to stop.');
-        ticketData.pausedCategories[cat] = true;
-        saveTicketData();
-        return message.reply(`Category ${cat} paused.`);
+        if (CONFIG.roles[cat]) {
+            ticketData.pausedCategories[cat] = true;
+            saveTicketData();
+            return message.reply(`Category ${cat} is now paused.`);
+        }
     }
+
     if (command === 'startcat') {
         const cat = args[0];
-        if (!cat) return message.reply('Specify category to start.');
-        ticketData.pausedCategories[cat] = false;
-        saveTicketData();
-        return message.reply(`Category ${cat} unpaused.`);
+        if (CONFIG.roles[cat]) {
+            ticketData.pausedCategories[cat] = false;
+            saveTicketData();
+            return message.reply(`Category ${cat} is now active.`);
+        }
     }
+
     if (command === 'stop') {
         const sub = args[0];
-        if (!sub) return message.reply('Specify subtopic to stop.');
         ticketData.pausedSubtopics[sub] = true;
         saveTicketData();
-        return message.reply(`Subtopic ${sub} paused.`);
+        return message.reply(`Subtopic ${sub} is now paused.`);
     }
+
     if (command === 'start') {
         const sub = args[0];
-        if (!sub) return message.reply('Specify subtopic to start.');
         ticketData.pausedSubtopics[sub] = false;
         saveTicketData();
-        return message.reply(`Subtopic ${sub} unpaused.`);
+        return message.reply(`Subtopic ${sub} is now active.`);
     }
 });
 
 // --- DEPLOY ---
-client.login(process.env.BOT_TOKEN_1);
-
 client.login(process.env.BOT_TOKEN_1);
 
