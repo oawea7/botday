@@ -1,218 +1,226 @@
-import fs from 'fs';
+import 'dotenv/config';
+import { Client, GatewayIntentBits, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, PermissionsBitField } from 'discord.js';
 import express from 'express';
-import { Client, GatewayIntentBits, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, Events, StringSelectMenuBuilder } from 'discord.js';
-import { config } from 'dotenv';
-import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
 
-config();
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
-// --- CONFIG ---
-const CONFIG = {
-    guildId: '1402400197040013322',
-    ticketCategoryId: '1437139682361344030',
-    roles: {
-        publicRelations: '1402416210779312249',
-        staffEnquiries: '1402416194354544753',
-        moderationSupport: '1402411949593202800',
-        leadership: '1402400285674049576',
-        support: '1402417889826443356',
-        specialUser: '1107787991444881408'
-    },
-    transcriptsChannelId: '1437112357787533436',
-    supportImage: 'https://cdn.discordapp.com/attachments/1402405357812187287/1403398794695016470/support3.png',
-    emojis: {
-        publicRelations: '<:flower_yellow:1437121213796188221>',
-        staffEnquiries: '<:flower_pink:1437121075086622903>',
-        moderationSupport: '<:flower_blue:1415086940306276424>',
-        leadership: '<:flower_green:1437121005821759688>',
-        general: '<:c_flower:1437125663231315988>'
-    },
-    bloxlinkGroupId: '250548768'
-};
-
-// --- CLIENT ---
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers
-    ],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers],
     partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-// --- TICKET DATA ---
-const ticketDataPath = './ticketData.json';
-let ticketData = { ticketCounter: 1, pausedCategories: {}, pausedSubtopics: {}, activeTickets: {} };
-if (fs.existsSync(ticketDataPath)) ticketData = JSON.parse(fs.readFileSync(ticketDataPath, 'utf-8'));
+// ==== CONFIG ====
+const config = {
+    roles: {
+        leadership: '1402400285674049576',
+        specialUser: '1107787991444881408',
+        moderation: '1402411949593202800',
+        staffing: '1402416194354544753',
+        pr: '1402416210779312249',
+        supportTeam: '1402417889826443356'
+    },
+    channels: {
+        transcriptLog: '1437112357787533436',
+        ticketCategory: '1437139682361344030',
+        adminLog: '1437112357787533436'
+    },
+    ticketSettings: {
+        cooldownSeconds: 34,
+        naming: 'cat-USERNAME-ticketNUMBER',
+        autoDeleteMinutes: 10,
+        embedColor: '#FFA700',
+        attachmentArchiving: true
+    },
+    panel: {
+        embedImage: 'https://cdn.discordapp.com/attachments/1402405357812187287/1403398794695016470/support3.png?ex=6912acba&is=69115b3a&hm=f1a2108fee21ca4a78574a96b1d947dfa90a7548c99b097b692c1b858bf47783&',
+        description: "Welcome to Adalea's Support channel! Please select the category that best fits your needs before opening a ticket. The corresponding team will respond to your ticket in a timely manner. Thank you for your patience and respect!",
+        title: "<:verified:1406645489381806090> **Adalea Support**",
+        categories: [
+            { name: 'Staffing Enquiries', emoji: '<:c_flower:1437125663231315988>', role: '1402416194354544753', subtopics: ['Reporting','Applications'] },
+            { name: 'Public Relations Enquiries', emoji: '<:flower_yellow:1437121213796188221>', role: '1402416210779312249', subtopics: ['Affiliation','Prize claim'] },
+            { name: 'Moderation Support', emoji: '<:flower_pink:1437121075086622903>', role: '1402411949593202800', subtopics: ['Appealing','Reporting'] },
+            { name: 'Leadership', emoji: '<:flower_blue:1415086940306276424>', role: '1402400285674049576', subtopics: [] },
+            { name: 'General', emoji: '<:flower_green:1437121005821759688>', role: '1402417889826443356', subtopics: [] }
+        ]
+    }
+};
 
-function saveTicketData() {
-    fs.writeFileSync(ticketDataPath, JSON.stringify(ticketData, null, 2));
+// ==== EXPRESS SERVER ====
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.get('/', (req,res)=> res.send('Adalea Ticket Bot online!'));
+app.listen(PORT, ()=> console.log(`Web server listening on port ${PORT}`));
+
+// ==== DATA STORAGE ====
+let ticketData = { lastTicketNumber: 0 };
+if(fs.existsSync('./tickets.json')){
+    ticketData = JSON.parse(fs.readFileSync('./tickets.json', 'utf8'));
+}
+const tickets = new Map(); // key: userId, value: ticket info
+const cooldowns = new Map(); // key: userId, value: timestamp
+const stoppedCategories = new Set();
+const stoppedSubtopics = new Set();
+
+// ==== HELPERS ====
+function checkCooldown(userId){
+    if(!cooldowns.has(userId)) return false;
+    return (Date.now() - cooldowns.get(userId)) < config.ticketSettings.cooldownSeconds*1000;
+}
+function updateCooldown(userId){
+    cooldowns.set(userId, Date.now());
+}
+function createTicketName(categoryName, username, number){
+    return config.ticketSettings.naming.replace('USERNAME', username).replace('cat', categoryName.toLowerCase().replace(/\s+/g,'')).replace('NUMBER', number);
+}
+function canRunCommand(member){
+    return member.roles.cache.has(config.roles.leadership) || member.id === config.roles.specialUser;
+}
+async function createTranscript(channel){
+    const messages = await channel.messages.fetch({limit:100});
+    let content = `Transcript for #${channel.name}\n\n`;
+    messages.reverse().forEach(m=>{
+        content += `[${m.createdAt.toISOString()}] ${m.author.tag}: ${m.content}\n`;
+        if(m.attachments.size>0){
+            m.attachments.forEach(a=>content += `Attachment: ${a.url}\n`);
+        }
+    });
+    const filePath = path.join(__dirname, `${channel.name}_transcript.txt`);
+    fs.writeFileSync(filePath, content);
+    const logChannel = await client.channels.fetch(config.channels.transcriptLog);
+    await logChannel.send({files:[filePath]});
+    fs.unlinkSync(filePath);
 }
 
-// --- HELPERS ---
-function createTicketEmbed(user, categoryLabel) {
-    return new EmbedBuilder()
-        .setTitle(`🎫 ${categoryLabel} Ticket`)
-        .setDescription(`Hello ${user}, a staff member will be with you shortly.`)
-        .setColor('#00FFFF')
-        .setImage(CONFIG.supportImage)
-        .setThumbnail(user.displayAvatarURL());
-}
+// ==== COMMAND HANDLER ====
+client.on('messageCreate', async message=>{
+    if(!message.guild || message.author.bot) return;
+    const args = message.content.trim().split(/\s+/);
+    const cmd = args.shift().toLowerCase();
 
-function createCategoryButtons() {
-    return new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId('ticket_publicRelations')
-            .setLabel(`${CONFIG.emojis.publicRelations} Public Relations Enquiries`)
-            .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-            .setCustomId('ticket_staffEnquiries')
-            .setLabel(`${CONFIG.emojis.staffEnquiries} Staff Enquiries`)
-            .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-            .setCustomId('ticket_moderationSupport')
-            .setLabel(`${CONFIG.emojis.moderationSupport} Moderation Support`)
-            .setStyle(ButtonStyle.Danger),
-        new ButtonBuilder()
-            .setCustomId('ticket_leadership')
-            .setLabel(`${CONFIG.emojis.leadership} Leadership`)
-            .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-            .setCustomId('ticket_general')
-            .setLabel(`${CONFIG.emojis.general} General Support`)
-            .setStyle(ButtonStyle.Success)
-    );
-}
-
-function createSubtopicDropdown(category) {
-    return new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-            .setCustomId(`subtopic_${category}`)
-            .setPlaceholder('Select a subtopic')
-            .setMinValues(1)
-            .setMaxValues(1)
-            .addOptions([
-                { label: 'General Issue', value: 'general' },
-                { label: 'Specific Request', value: 'specific' },
-                { label: 'Other', value: 'other' }
-            ])
-    );
-}
-
-// --- EVENTS ---
-client.on(Events.ClientReady, () => {
-    console.log(`Logged in as ${client.user.tag}`);
-});
-
-client.on(Events.InteractionCreate, async interaction => {
-    const { user, guild, customId } = interaction;
-    if (!guild || guild.id !== CONFIG.guildId) return;
-
-    // Handle category button
-    if (customId.startsWith('ticket_')) {
-        const category = customId.split('_')[1];
-        const dropdown = createSubtopicDropdown(category);
-        return interaction.reply({ content: 'Select your ticket subtopic:', components: [dropdown], ephemeral: true });
+    // ----- SUPPORT PANEL -----
+    if(cmd === '?support' && args[0] === 'role'){
+        if(!canRunCommand(message.member)) return;
+        await message.delete().catch(()=>{});
+        const embed = new EmbedBuilder()
+            .setTitle(config.panel.title)
+            .setDescription(config.panel.description)
+            .setColor(config.ticketSettings.embedColor)
+            .setImage(config.panel.embedImage);
+        const row = new ActionRowBuilder();
+        config.panel.categories.forEach(cat=>{
+            row.addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`ticket_${cat.name.replace(/\s+/g,'_')}`)
+                    .setLabel(cat.name)
+                    .setEmoji(cat.emoji)
+                    .setStyle(ButtonStyle.Primary)
+            );
+        });
+        await message.channel.send({embeds:[embed], components:[row]});
     }
 
-    // Handle subtopic dropdown
-    if (customId.startsWith('subtopic_')) {
-        const category = customId.split('_')[1];
-        const subtopic = interaction.values[0];
+    // ----- STOP / RESUME -----
+    if((cmd === '?stop' || cmd === '?resume') && args[0]){
+        if(!canRunCommand(message.member)) return;
+        const target = args[0];
+        if(cmd === '?stop'){
+            stoppedCategories.add(target);
+            stoppedSubtopics.add(target);
+        } else {
+            stoppedCategories.delete(target);
+            stoppedSubtopics.delete(target);
+        }
+        await message.channel.send(`Command ${cmd} executed for ${target}`);
+    }
 
-        const channel = await guild.channels.create({
-            name: `ticket-${ticketData.ticketCounter}`,
+    // ----- CLOSE TICKET -----
+    if(cmd === '?close'){
+        if(!message.channel.name.includes('ticket')) return;
+        await createTranscript(message.channel);
+        await message.channel.send('Ticket closed and transcript saved.');
+        setTimeout(()=>message.channel.delete().catch(()=>{}), config.ticketSettings.autoDeleteMinutes*60*1000);
+    }
+});
+
+// ==== INTERACTION HANDLER ====
+client.on('interactionCreate', async interaction=>{
+    if(interaction.isButton()){
+        const [type, catName] = interaction.customId.split('_');
+        const cat = config.panel.categories.find(c=>c.name.replace(/\s+/g,'_')===catName);
+        if(!cat) return;
+        if(stoppedCategories.has(catName)) return interaction.reply({content:`This category is currently disabled.`, ephemeral:true});
+        const userId = interaction.user.id;
+        if(checkCooldown(userId)){
+            await interaction.reply({content:`Please wait before creating another ticket.`, ephemeral:true});
+            return;
+        }
+        updateCooldown(userId);
+
+        if(cat.subtopics.length>0){
+            const select = new StringSelectMenuBuilder()
+                .setCustomId(`sub_${catName}`)
+                .setPlaceholder('Select your issue...')
+                .addOptions(cat.subtopics.map(s=>({label:s,value:s})));
+            const row = new ActionRowBuilder().addComponents(select);
+            await interaction.reply({content:`Select a subtopic for ${cat.name}:`, components:[row], ephemeral:true});
+        } else {
+            ticketData.lastTicketNumber += 1;
+            const ticketNum = ticketData.lastTicketNumber;
+            fs.writeFileSync('./tickets.json', JSON.stringify(ticketData, null,2));
+            const ticketName = createTicketName(cat.name, interaction.user.username, ticketNum);
+            const channel = await interaction.guild.channels.create({
+                name: ticketName,
+                type: 0,
+                parent: config.channels.ticketCategory,
+                permissionOverwrites:[
+                    {id:interaction.user.id, allow:[PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]},
+                    {id:cat.role, allow:[PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]},
+                    {id:interaction.guild.roles.everyone, deny:[PermissionsBitField.Flags.ViewChannel]}
+                ]
+            });
+            tickets.set(userId, {channelId: channel.id, category: cat.name});
+            const embed = new EmbedBuilder()
+                .setTitle(`${cat.name} Ticket`)
+                .setDescription(`Ticket created for ${interaction.user}.\n**Issue:** N/A`)
+                .setColor(config.ticketSettings.embedColor);
+            await channel.send({content:`<@${interaction.user.id}> <@&${cat.role}>`, embeds:[embed]});
+            await interaction.reply({content:`Ticket created: ${channel}`, ephemeral:true});
+        }
+    }
+
+    if(interaction.isStringSelectMenu()){
+        const [type, catName] = interaction.customId.split('_');
+        const cat = config.panel.categories.find(c=>c.name.replace(/\s+/g,'_')===catName);
+        if(!cat) return;
+        if(stoppedSubtopics.has(catName)) return interaction.reply({content:`This subtopic is currently disabled.`, ephemeral:true});
+
+        ticketData.lastTicketNumber += 1;
+        const ticketNum = ticketData.lastTicketNumber;
+        fs.writeFileSync('./tickets.json', JSON.stringify(ticketData, null,2));
+        const ticketName = createTicketName(cat.name, interaction.user.username, ticketNum);
+        const channel = await interaction.guild.channels.create({
+            name: ticketName,
             type: 0,
-            parent: CONFIG.ticketCategoryId,
-            permissionOverwrites: [
-                { id: guild.roles.everyone, deny: ['ViewChannel'] },
-                { id: user.id, allow: ['ViewChannel', 'SendMessages', 'AttachFiles', 'ReadMessageHistory'] },
-                { id: CONFIG.roles[category], allow: ['ViewChannel', 'SendMessages', 'ManageChannels', 'ReadMessageHistory'] }
+            parent: config.channels.ticketCategory,
+            permissionOverwrites:[
+                {id:interaction.user.id, allow:[PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]},
+                {id:cat.role, allow:[PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]},
+                {id:interaction.guild.roles.everyone, deny:[PermissionsBitField.Flags.ViewChannel]}
             ]
         });
-
-        ticketData.activeTickets[channel.id] = { userId: user.id, category, subtopic, createdAt: Date.now() };
-        ticketData.ticketCounter++;
-        saveTicketData();
-
-        const embed = createTicketEmbed(user, category);
-        await channel.send({ content: `<@${user.id}>`, embeds: [embed], components: [
-            new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('claim').setLabel('Claim').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('close').setLabel('Close').setStyle(ButtonStyle.Danger)
-            )
-        ]});
-
-        return interaction.update({ content: `Ticket created: <#${channel.id}>`, components: [], ephemeral: true });
-    }
-
-    // Handle claim/close buttons in ticket channel
-    if (customId === 'claim' || customId === 'close') {
-        const ticket = ticketData.activeTickets[interaction.channel.id];
-        if (!ticket) return interaction.reply({ content: 'This is not a ticket channel.', ephemeral: true });
-
-        if (customId === 'claim') {
-            await interaction.reply({
-                embeds: [new EmbedBuilder()
-                    .setDescription(`<@${user.id}> will be handling this ticket.`)
-                    .setColor('#00FFFF')
-                ],
-                ephemeral: false
-            });
-        }
-
-        if (customId === 'close') {
-            const transcriptText = `Ticket by <@${ticket.userId}>\nCategory: ${ticket.category}\nSubtopic: ${ticket.subtopic}\nOpened: ${new Date(ticket.createdAt).toLocaleString()}\nClosed: ${new Date().toLocaleString()}`;
-            fs.writeFileSync(`./transcript-${interaction.channel.id}.txt`, transcriptText);
-
-            const transcriptChannel = await client.channels.fetch(CONFIG.transcriptsChannelId);
-            await transcriptChannel.send({ content: `Transcript for <#${interaction.channel.id}>`, files: [`./transcript-${interaction.channel.id}.txt`] });
-
-            delete ticketData.activeTickets[interaction.channel.id];
-            saveTicketData();
-            await interaction.channel.delete();
-        }
-    }
-});
-
-// --- PREFIX COMMANDS ---
-client.on(Events.MessageCreate, async message => {
-    if (message.author.bot || !message.content.startsWith('?')) return;
-    const args = message.content.slice(1).split(/ +/);
-    const command = args.shift().toLowerCase();
-
-    // Start/Stop categories or subtopics
-    if (command === 'supportpanel') {
-        const channel = message.channel;
+        tickets.set(interaction.user.id, {channelId: channel.id, category: cat.name});
         const embed = new EmbedBuilder()
-            .setTitle('🎫 Support Panel')
-            .setDescription('Click a button below to open a ticket.')
-            .setColor('#00FFFF')
-            .setImage(CONFIG.supportImage);
-        await channel.send({ embeds: [embed], components: [createCategoryButtons()] });
-    }
-
-    if (['stopcat','startcat'].includes(command) && args[0]) {
-        const cat = args[0];
-        if (ticketData.pausedCategories[cat] !== undefined) {
-            ticketData.pausedCategories[cat] = (command === 'stopcat');
-            saveTicketData();
-            message.reply(`Category ${cat} has been ${(command==='stopcat'?'paused':'resumed')}.`);
-        }
-    }
-
-    if (['stop','start'].includes(command) && args[0]) {
-        const sub = args[0];
-        ticketData.pausedSubtopics[sub] = (command === 'stop');
-        saveTicketData();
-        message.reply(`Subtopic ${sub} has been ${(command==='stop'?'paused':'resumed')}.`);
+            .setTitle(`${cat.name} Ticket`)
+            .setDescription(`Ticket created for ${interaction.user}.\n**Issue:** ${interaction.values[0]}`)
+            .setColor(config.ticketSettings.embedColor);
+        await channel.send({content:`<@${interaction.user.id}> <@&${cat.role}>`, embeds:[embed]});
+        await interaction.reply({content:`Ticket created: ${channel}`, ephemeral:true});
     }
 });
 
-// --- DEPLOY ---
+// ==== READY ====
+client.once('ready', ()=>console.log(`Logged in as ${client.user.tag}`));
+
+// ==== LOGIN ====
+if(!process.env.BOT_TOKEN_1) throw new Error('BOT_TOKEN_1 not found in environment!');
 client.login(process.env.BOT_TOKEN_1);
