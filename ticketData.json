@@ -1,12 +1,1 @@
-{
-  "ticketCounter": 1,
-  "pausedCategories": {
-    "publicRelations": false,
-    "staffEnquiries": false,
-    "moderationSupport": false,
-    "leadership": false,
-    "general": false
-  },
-  "pausedSubtopics": {},
-  "activeTickets": {}
-}
+
