@@ -1,11 +1,11 @@
 {
   "name": "adalea-ticket-bot",
   "version": "1.0.0",
-  "description": "Adalea Tickets v2 Clone",
-  "main": "bot.js",
+  "description": "Adalea Tickets v2 Clone - Full Working Version",
+  "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "discord.js": "^14.15.0",
