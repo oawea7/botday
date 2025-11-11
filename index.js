@@ -1,6 +1,6 @@
 // ===================
-// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V4)
-// Includes all bug fixes, modal implementation, correct /move logic, and robust error handling.
+// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V5)
+// FIXES: Subtopic menu failure, cooldown premature application, and robust category/subtopic handling.
 // ===================
 
 import {
@@ -48,14 +48,14 @@ const client = new Client({
 const BOT_TOKEN = process.env.BOT_TOKEN_1;
 
 // ===================
-// ID CONFIGURATION (Uses IDs provided in previous context)
+// ID CONFIGURATION
 // ===================
 const IDs = {
   // --- YOUR GUILD ID ---
   GUILD: '1402400197040013322', 
   // ---------------------
   leadership: '1402400285674049576',
-  special: '1107787991444881408', // Assuming this is a trusted user ID for setup commands
+  special: '1107787991444881408',
   moderation: '1402411949593202800',
   staffing: '1402416194354544753',
   pr: '1402416210779312249',
@@ -146,7 +146,6 @@ function hasCooldown(userId) {
 }
 function isStaff(member) {
     if (!member) return false;
-    // Staff roles include moderation, staffing, pr, and supportTeam
     const staffRoleIds = [IDs.moderation, IDs.staffing, IDs.pr, IDs.supportTeam].filter(id => id);
     return member.roles.cache.some(role => staffRoleIds.includes(role.id));
 }
@@ -166,7 +165,6 @@ client.on('messageCreate', async message => {
   // SUPPORT PANEL SETUP
   if (cmd === 'supportpanel' && isLeaderOrSpecial) {
     try {
-      // Deletes old panel message if one exists
       const existing = message.channel.messages.cache.find(m => m.author.id === client.user.id && m.embeds.length);
       if (existing) await existing.delete().catch(() => {});
 
@@ -200,7 +198,6 @@ client.on('messageCreate', async message => {
 
     try {
       if (arg.includes('-')) {
-        // Handle subtopic stop/resume
         const [cat, sub] = arg.split('-');
         const subtopicObject = categories[cat]?.subtopics?.find(s => s.label.toLowerCase() === sub.toLowerCase());
         if (!subtopicObject) return message.channel.send('Subtopic not found. Use the label, e.g., `moderation-appealing`.');
@@ -210,7 +207,6 @@ client.on('messageCreate', async message => {
         else delete stoppedSubtopics[`${cat}_${subtopicValue}`];
         return message.channel.send(`Subtopic **${sub}** under category **${cat}** ${cmd === 'stop' ? 'stopped' : 'resumed'}.`);
       } else {
-        // Handle category stop/resume
         if (!categories[arg]) return message.channel.send('Category key not found. Use the key, e.g., `moderation`.');
         if (cmd === 'stop') stoppedCategories[arg] = true;
         else delete stoppedCategories[arg];
@@ -233,6 +229,7 @@ client.on('interactionCreate', async interaction => {
   // 1. CATEGORY BUTTONS (Initial Ticket Request)
   // ===================
   if (interaction.isButton() && interaction.customId.startsWith('category_')) {
+    // Crucial: Defer the reply immediately to prevent "Interaction Failed"
     await interaction.deferReply({ ephemeral: true });
 
     try {
@@ -242,30 +239,31 @@ client.on('interactionCreate', async interaction => {
       if (!catKey) return interaction.editReply({ content: 'Category not found.' });
       if (isCategoryStopped(catKey)) return interaction.editReply({ content: 'This category is currently stopped.' });
 
-      if (hasCooldown(interaction.user.id))
-        return interaction.editReply({ content: `You are on cooldown. Please wait ${COOLDOWN_SECONDS} seconds before opening another ticket.` });
-
-      cooldowns[interaction.user.id] = Date.now();
-
       const category = categories[catKey];
       
       // If subtopics exist, show the select menu
       if (category.subtopics) {
+        // We only apply cooldown AFTER a final selection/creation is made
         const menu = new ActionRowBuilder().addComponents(
           new StringSelectMenuBuilder()
             .setCustomId(`subtopic_${catKey}`)
             .setPlaceholder('Select the issue')
             .addOptions(category.subtopics.map(s => ({ label: s.label, value: s.value })))
         );
+        // Use followUp if deferReply was used, or editReply if that was the last action
         return interaction.editReply({ content: 'Please select a subtopic for your ticket.', components: [menu] });
       }
 
-      // If no subtopics, create the ticket immediately
+      // If no subtopics (General/Leadership), apply cooldown and create ticket immediately
+      if (hasCooldown(interaction.user.id))
+        return interaction.editReply({ content: `You are on cooldown. Please wait ${COOLDOWN_SECONDS} seconds before opening another ticket.` });
+
+      cooldowns[interaction.user.id] = Date.now();
       await createTicketChannel(interaction.user, catKey, null, interaction);
 
     } catch (error) {
         console.error('Error in category button interaction:', error);
-        interaction.editReply({ content: 'An unexpected error occurred during ticket creation.' }).catch(() => {});
+        interaction.editReply({ content: 'An unexpected error occurred during ticket creation. (Check bot permissions and category key in config.)' }).catch(() => {});
     }
   }
 
@@ -273,6 +271,7 @@ client.on('interactionCreate', async interaction => {
   // 2. SUBTOPIC SELECTION
   // ===================
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('subtopic_')) {
+    // Use deferUpdate because we are editing the previous deferred reply
     await interaction.deferUpdate();
 
     try {
@@ -281,13 +280,18 @@ client.on('interactionCreate', async interaction => {
 
       if (isSubtopicStopped(catKey, selected)) return interaction.editReply({ content: 'This subtopic is currently stopped.', components: [] });
       
+      // Apply cooldown and create ticket now that the final selection is made
+      if (hasCooldown(interaction.user.id))
+        return interaction.editReply({ content: `You are on cooldown. Please wait ${COOLDOWN_SECONDS} seconds before opening another ticket.`, components: [] });
+
+      cooldowns[interaction.user.id] = Date.now();
       await createTicketChannel(interaction.user, catKey, selected, interaction);
     } catch (error) {
         console.error('Error in subtopic selection interaction:', error);
         interaction.editReply({ content: 'An unexpected error occurred after selecting the subtopic.', components: [] }).catch(() => {});
     }
   }
-
+  
   // ===================
   // 3. CLAIM & CLOSE BUTTONS (Inside Ticket Channel)
   // ===================
@@ -321,7 +325,6 @@ client.on('interactionCreate', async interaction => {
             .setColor(0x32CD32) 
             .setDescription(`✅ <@${interaction.user.id}> **has claimed this ticket** and will assist you shortly.`);
             
-        // Find the original ticket message to reply to/edit
         const firstMessage = (await ticketChannel.messages.fetch({ limit: 1, after: '0' })).first(); 
 
         if (firstMessage) {
@@ -330,7 +333,6 @@ client.on('interactionCreate', async interaction => {
             await ticketChannel.send({ embeds: [claimEmbed] });
         }
         
-        // Disable the Claim button
         const newRow = ActionRowBuilder.from(interaction.message.components[0]).setComponents(
             ButtonBuilder.from(interaction.message.components[0].components.find(c => c.customId.startsWith('claim'))).setDisabled(true),
             ButtonBuilder.from(interaction.message.components[0].components.find(c => c.customId.startsWith('close'))).setDisabled(false)
@@ -384,7 +386,6 @@ client.on('interactionCreate', async interaction => {
         // --- TRANSCRIPT GENERATION ---
         let transcript = `--- Adalea Ticket Transcript ---\nTicket Creator: ${client.users.cache.get(ticket.user)?.tag || 'Unknown User'}\nCategory: ${categories[ticket.category]?.name || 'N/A'}\nSubtopic: ${tickets[channelId].subtopic || 'N/A'}\nClosed By: ${interaction.user.tag}\nClosed At: ${new Date().toISOString()}\nReason: ${reason}\n--- Conversation ---\n`;
         
-        // Fetch all messages
         let allMessages = [];
         let lastId;
         while (true) {
@@ -407,7 +408,7 @@ client.on('interactionCreate', async interaction => {
 
         const logChannel = await client.channels.fetch(IDs.transcriptLog).catch(() => null);
         
-        // --- FINAL TRANSCRIPT EMBED (Matches desired format) ---
+        // --- FINAL TRANSCRIPT EMBED ---
         const transcriptEmbed = new EmbedBuilder()
             .setColor(0xFFA500)
             .setTitle('🎫 Ticket Closed')
@@ -436,7 +437,6 @@ client.on('interactionCreate', async interaction => {
             const creator = await client.users.fetch(ticket.user);
             await creator.send({
                 content: `Your ticket, **${ticketChannel.name}**, has been closed by **${interaction.user.tag}**.\nReason: **${reason}**\nThank you for reaching out to Adalea Support!`,
-                // Optionally attach transcript if log failed, but sticking to logic where log channel sends it
             }).catch(() => console.log('Could not DM ticket creator.'));
         } catch (e) {
             console.error('Error sending DM to creator:', e);
@@ -456,7 +456,7 @@ client.on('interactionCreate', async interaction => {
     } catch (error) {
         console.error('CRITICAL Error in close action:', error);
         await interaction.editReply({ content: 'A critical error occurred during closing/transcript process. Check console for details.', ephemeral: true });
-        ticket.closed = false; // Reset state if closing fails
+        ticket.closed = false; 
         saveTickets();
     }
   }
@@ -473,23 +473,18 @@ client.on('interactionCreate', async interaction => {
     const channel = interaction.channel;
     const subcommand = interaction.options.getSubcommand();
     
-    // Check 1: Must be in an active ticket channel
     if (!channel || !tickets[channel.id]) {
       return interaction.reply({ content: 'This command can only be used in an active ticket channel.', ephemeral: true });
     }
     
-    // Check 2: Access Control
-    // /move is Staff/Leader only
     if (subcommand === 'move' && !isStaffMember) {
         return interaction.reply({ content: 'Only staff and leadership can move tickets.', ephemeral: true });
     }
     
-    // /add, /remove allowed for Staff/Leader OR Ticket Creator
     if ((subcommand === 'add' || subcommand === 'remove') && !isStaffMember && tickets[channel.id]?.user !== interaction.user.id) {
          return interaction.reply({ content: 'You do not have permission to use this command here.', ephemeral: true });
     }
 
-    // Now proceed with logic
     const user = interaction.options.getUser('user');
 
     try {
@@ -503,7 +498,7 @@ client.on('interactionCreate', async interaction => {
         return interaction.reply({ content: `${user.tag} has been **removed** from the ticket.`, ephemeral: false });
       }
       
-      // --- CORRECT /MOVE LOGIC (Updates Roles and Category Parent) ---
+      // --- CORRECT /MOVE LOGIC ---
       if (subcommand === 'move') {
         const newCategoryKey = interaction.options.getString('category_key');
         const newCat = getCategoryByKey(newCategoryKey);
@@ -525,7 +520,7 @@ client.on('interactionCreate', async interaction => {
             await channel.permissionOverwrites.edit(newCat.role, { ViewChannel: true, SendMessages: true });
         }
 
-        // 3. Update Channel Category Parent (Moves to the main ticket category)
+        // 3. Update Channel Category Parent
         await channel.setParent(IDs.ticketCategory, { lockPermissions: false });
         
         // 4. Update Ticket Storage
@@ -571,9 +566,7 @@ async function createTicketChannel(user, categoryKey, subtopic, interaction) {
     const overwrites = [
       { id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
       { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-      // Grant access to the category's associated role
       ...(cat.role ? [{ id: cat.role, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }] : []),
-      // Grant access to Leadership/Bot for management
       { id: IDs.leadership, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
       { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ManageChannels] }
     ];
@@ -601,13 +594,15 @@ async function createTicketChannel(user, categoryKey, subtopic, interaction) {
     await channel.send({ content: `${roleMention} | <@${user.id}>`, embeds: [embed], components: [row] });
     
     tickets[channel.id] = { user: user.id, category: categoryKey, subtopic: subtopic || null, claimed: null, closed: false, openTime: Date.now() };
-    saveTickets(); // Ensure immediate save
+    saveTickets();
 
+    // Since this is the final step, use editReply from the previous deferred state
     await interaction.editReply({ content: `Ticket created: ${channel}`, components: [] });
     
   } catch (error) {
     console.error('Error creating ticket channel:', error);
     delete cooldowns[user.id];
+    // Attempt to send an error reply to the user if the channel creation failed
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ content: 'Failed to create ticket channel due to a server error. Please try again later.', components: [] });
     } else {
