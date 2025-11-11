@@ -1,6 +1,6 @@
 // ===================
-// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V5)
-// FIXES: Subtopic menu failure, cooldown premature application, and robust category/subtopic handling.
+// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V6)
+// FIXES: Select menu option value length, ensuring all multi-step tickets work.
 // ===================
 
 import {
@@ -92,6 +92,7 @@ let stoppedSubtopics = {};
 
 // ===================
 // CATEGORIES & SUBTOPICS
+// IMPORTANT CHANGE: Added 'key' to subtopics for Discord's 100 char limit on select menu values.
 // ===================
 const categories = {
   moderation: {
@@ -100,8 +101,8 @@ const categories = {
     role: IDs.moderation,
     emoji: '<:c_flower:1437125663231315988>',
     subtopics: [
-      { label: 'Appealing', value: 'Appealing a warning, mute, kick, or server ban.' },
-      { label: 'Reporting', value: 'Reporting rule-breaking behaviour within our server. Refer to <#1402405335964057732> for our list of rules.' },
+      { key: 'appeal', label: 'Appealing', value: 'Appealing a warning, mute, kick, or server ban.' },
+      { key: 'report', label: 'Reporting', value: 'Reporting rule-breaking behaviour within our server. Refer to <#1402405335964057732> for our list of rules.' },
     ],
   },
   staffing: {
@@ -110,8 +111,8 @@ const categories = {
     role: IDs.staffing,
     emoji: '<:flower_yellow:1437121213796188221>',
     subtopics: [
-      { label: 'Reporting', value: 'Reporting a member of staff, Middle Rank, or High Rank - not for reporting trollers. Refer to <#1402416385547702343> instead.' },
-      { label: 'Applications', value: 'Applying for a MR or HR position at Adalea, or to join the Moderation Team.' },
+      { key: 'staff_report', label: 'Reporting', value: 'Reporting a member of staff, Middle Rank, or High Rank - not for reporting trollers. Refer to <#1402416385547702343> instead.' },
+      { key: 'applications', label: 'Applications', value: 'Applying for a MR or HR position at Adalea, or to join the Moderation Team.' },
     ],
   },
   pr: {
@@ -120,16 +121,26 @@ const categories = {
     role: IDs.pr,
     emoji: '<:flower_pink:1437121075086622903>',
     subtopics: [
-      { label: 'Affiliation', value: 'Forming a partnership between your group and Adalea.' },
-      { label: 'Prize claim', value: 'Claiming your prize after winning an event, usually hosted in <#1402405455669497957> or <#1402405468793602158>.' },
+      { key: 'affiliation', label: 'Affiliation', value: 'Forming a partnership between your group and Adalea.' },
+      { key: 'prize_claim', label: 'Prize claim', value: 'Claiming your prize after winning an event, usually hosted in <#1402405455669497957> or <#1402405468793602158>.' },
     ],
   },
-  general: { name: 'General', key: 'general', role: IDs.supportTeam, emoji: '<:flower_blue:1415086940306276424>', subtopics: null }, // Added supportTeam ID
+  general: { name: 'General', key: 'general', role: IDs.supportTeam, emoji: '<:flower_blue:1415086940306276424>', subtopics: null }, 
   leadership: { name: 'Leadership', key: 'leadership', role: IDs.leadership, emoji: '<:flower_green:1437121005821759688>', subtopics: null },
 };
 
 // Helper function to get a category object by its key
 const getCategoryByKey = (key) => categories[key];
+// Helper function to get subtopic value by its key (used for checking stopped state)
+const getSubtopicValueByKey = (categoryKey, subtopicKey) => {
+    const category = getCategoryByKey(categoryKey);
+    return category?.subtopics?.find(s => s.key === subtopicKey)?.value;
+}
+// Helper function to get subtopic label by its key (used for displaying in ticket)
+const getSubtopicLabelByKey = (categoryKey, subtopicKey) => {
+    const category = getCategoryByKey(categoryKey);
+    return category?.subtopics?.find(s => s.key === subtopicKey)?.label;
+}
 
 // ===================
 // HELPER FUNCTIONS
@@ -137,8 +148,10 @@ const getCategoryByKey = (key) => categories[key];
 function isCategoryStopped(categoryKey) {
   return stoppedCategories[categoryKey] === true;
 }
-function isSubtopicStopped(categoryKey, subtopic) {
-  return stoppedSubtopics[`${categoryKey}_${subtopic}`] === true;
+function isSubtopicStopped(categoryKey, subtopicKey) {
+  // Use the full value for checking the stopped state, but the key for the lookup
+  const subtopicValue = getSubtopicValueByKey(categoryKey, subtopicKey);
+  return stoppedSubtopics[`${categoryKey}_${subtopicValue}`] === true;
 }
 function hasCooldown(userId) {
   if (!cooldowns[userId]) return false;
@@ -146,7 +159,6 @@ function hasCooldown(userId) {
 }
 function isStaff(member) {
     if (!member) return false;
-    // Includes supportTeam ID from the categories map + leadership/special checks in the handler
     const staffRoleIds = [IDs.moderation, IDs.staffing, IDs.pr, IDs.supportTeam].filter(id => id);
     return member.roles.cache.some(role => staffRoleIds.includes(role.id));
 }
@@ -195,18 +207,18 @@ client.on('messageCreate', async message => {
 
   // STOP/RESUME CATEGORIES/SUBTOPICS
   if ((cmd === 'stop' || cmd === 'resume') && isLeaderOrSpecial) {
-    if (!arg) return message.channel.send('Specify a category key (e.g., `moderation`) or subtopic key (e.g., `moderation-appealing`).');
+    if (!arg) return message.channel.send('Specify a category key (e.g., `moderation`) or subtopic key (e.g., `moderation-appeal`).');
 
     try {
       if (arg.includes('-')) {
-        const [cat, sub] = arg.split('-');
-        const subtopicObject = categories[cat]?.subtopics?.find(s => s.label.toLowerCase() === sub.toLowerCase());
-        if (!subtopicObject) return message.channel.send('Subtopic not found. Use the label, e.g., `moderation-appealing`.');
+        const [cat, subKey] = arg.split('-');
+        const subtopicObject = categories[cat]?.subtopics?.find(s => s.key === subKey);
+        if (!subtopicObject) return message.channel.send('Subtopic key not found. Use the key, e.g., `moderation-appeal`.');
         const subtopicValue = subtopicObject.value;
 
         if (cmd === 'stop') stoppedSubtopics[`${cat}_${subtopicValue}`] = true;
         else delete stoppedSubtopics[`${cat}_${subtopicValue}`];
-        return message.channel.send(`Subtopic **${sub}** under category **${cat}** ${cmd === 'stop' ? 'stopped' : 'resumed'}.`);
+        return message.channel.send(`Subtopic **${subtopicObject.label}** under category **${cat}** ${cmd === 'stop' ? 'stopped' : 'resumed'}.`);
       } else {
         if (!categories[arg]) return message.channel.send('Category key not found. Use the key, e.g., `moderation`.');
         if (cmd === 'stop') stoppedCategories[arg] = true;
@@ -244,11 +256,15 @@ client.on('interactionCreate', async interaction => {
       
       // If subtopics exist, show the select menu
       if (category.subtopics) {
+        // CRITICAL FIX: Use the short 'key' for the select menu value, not the long 'value' (description)
         const menu = new ActionRowBuilder().addComponents(
           new StringSelectMenuBuilder()
             .setCustomId(`subtopic_${catKey}`)
             .setPlaceholder('Select the issue')
-            .addOptions(category.subtopics.map(s => ({ label: s.label, value: s.value })))
+            .addOptions(category.subtopics.map(s => ({ 
+                label: s.label, 
+                value: s.key // Use the short, unique key here
+            })))
         );
         return interaction.editReply({ content: 'Please select a subtopic for your ticket.', components: [menu] });
       }
@@ -263,7 +279,6 @@ client.on('interactionCreate', async interaction => {
 
     } catch (error) {
         console.error('Error in category button interaction:', error);
-        // CRITICAL FIX: Use editReply since it was deferred
         interaction.editReply({ content: 'An unexpected error occurred during ticket creation. (Check bot permissions and category key in config.)' }).catch(() => {});
     }
   }
@@ -277,16 +292,23 @@ client.on('interactionCreate', async interaction => {
 
     try {
       const catKey = interaction.customId.replace('subtopic_', '');
-      const selected = interaction.values[0];
-
-      if (isSubtopicStopped(catKey, selected)) return interaction.editReply({ content: 'This subtopic is currently stopped.', components: [] });
+      // This is the short key (e.g., 'appeal', 'affiliation')
+      const selectedKey = interaction.values[0];
+      
+      // Look up the full description (value) for the check
+      const subtopicValue = getSubtopicValueByKey(catKey, selectedKey);
+      
+      if (!subtopicValue) return interaction.editReply({ content: 'Subtopic value not found.', components: [] });
+      if (isSubtopicStopped(catKey, selectedKey)) return interaction.editReply({ content: 'This subtopic is currently stopped.', components: [] });
       
       // Apply cooldown and create ticket now that the final selection is made
       if (hasCooldown(interaction.user.id))
         return interaction.editReply({ content: `You are on cooldown. Please wait ${COOLDOWN_SECONDS} seconds before opening another ticket.`, components: [] });
 
       cooldowns[interaction.user.id] = Date.now();
-      await createTicketChannel(interaction.user, catKey, selected, interaction);
+      // Pass the short key for storage, and the full value for display in the ticket (or look up the label)
+      await createTicketChannel(interaction.user, catKey, selectedKey, interaction);
+      
     } catch (error) {
         console.error('Error in subtopic selection interaction:', error);
         interaction.editReply({ content: 'An unexpected error occurred after selecting the subtopic.', components: [] }).catch(() => {});
@@ -385,8 +407,12 @@ client.on('interactionCreate', async interaction => {
     const ticketChannel = interaction.guild.channels.cache.get(channelId) || await client.channels.fetch(channelId).catch(() => null);
 
     try {
+        // Use the short key stored in ticket.subtopic to get the full value for the transcript
+        const subtopicDescription = ticket.subtopic ? getSubtopicValueByKey(ticket.category, ticket.subtopic) : 'N/A';
+        const subtopicLabel = ticket.subtopic ? getSubtopicLabelByKey(ticket.category, ticket.subtopic) : 'N/A';
+        
         // --- TRANSCRIPT GENERATION ---
-        let transcript = `--- Adalea Ticket Transcript ---\nTicket Creator: ${client.users.cache.get(ticket.user)?.tag || 'Unknown User'}\nCategory: ${categories[ticket.category]?.name || 'N/A'}\nSubtopic: ${tickets[channelId].subtopic || 'N/A'}\nClosed By: ${interaction.user.tag}\nClosed At: ${new Date().toISOString()}\nReason: ${reason}\n--- Conversation ---\n`;
+        let transcript = `--- Adalea Ticket Transcript ---\nTicket Creator: ${client.users.cache.get(ticket.user)?.tag || 'Unknown User'}\nCategory: ${categories[ticket.category]?.name || 'N/A'}\nSubtopic Label: ${subtopicLabel}\nSubtopic Description: ${subtopicDescription}\nClosed By: ${interaction.user.tag}\nClosed At: ${new Date().toISOString()}\nReason: ${reason}\n--- Conversation ---\n`;
         
         let allMessages = [];
         let lastId;
@@ -528,6 +554,7 @@ client.on('interactionCreate', async interaction => {
         
         // 4. Update Ticket Storage
         tickets[channel.id].category = newCategoryKey;
+        tickets[channel.id].subtopic = null; // Reset subtopic on move
         saveTickets();
         
         // 5. Send Embed Notification
@@ -555,7 +582,7 @@ client.on('interactionCreate', async interaction => {
 // ===================
 // TICKET CREATION FUNCTION
 // ===================
-async function createTicketChannel(user, categoryKey, subtopic, interaction) {
+async function createTicketChannel(user, categoryKey, subtopicKey, interaction) {
   const guild = interaction.guild;
   const cat = categories[categoryKey];
   const ticketNumber = Object.keys(tickets).length + 1;
@@ -580,12 +607,16 @@ async function createTicketChannel(user, categoryKey, subtopic, interaction) {
       parent: IDs.ticketCategory,
       permissionOverwrites: overwrites,
     });
-
+    
+    // Look up the full description using the key
+    const subtopicDescription = subtopicKey ? getSubtopicValueByKey(categoryKey, subtopicKey) : null;
+    const subtopicLabel = subtopicKey ? getSubtopicLabelByKey(categoryKey, subtopicKey) : null;
+    
     const embed = new EmbedBuilder()
       .setColor(0xFFA500)
       .setTitle(`${cat.name} Ticket`)
       .setDescription(`Welcome <@${user.id}>! A member of the **${cat.name}** team will assist you shortly.\n\n` + 
-                      (subtopic ? `**Issue:** ${subtopic}` : 'Please explain your issue in detail.'))
+                      (subtopicLabel ? `**Issue:** ${subtopicLabel}\n*${subtopicDescription}*` : 'Please explain your issue in detail.'))
       .setFooter({ text: `Ticket ID: ${channel.id}` }); 
 
     const row = new ActionRowBuilder().addComponents(
@@ -594,21 +625,19 @@ async function createTicketChannel(user, categoryKey, subtopic, interaction) {
     );
 
     const roleMention = cat.role ? `<@&${cat.role}>` : '@here';
-    // CONFIRMED FIX: Explicitly mention both the role and the user
     await channel.send({ content: `${roleMention} | <@${user.id}>`, embeds: [embed], components: [row] });
     
-    tickets[channel.id] = { user: user.id, category: categoryKey, subtopic: subtopic || null, claimed: null, closed: false, openTime: Date.now() };
+    // Store the short key for later lookup
+    tickets[channel.id] = { user: user.id, category: categoryKey, subtopic: subtopicKey || null, claimed: null, closed: false, openTime: Date.now() };
     saveTickets();
 
-    // Since this is the final step, use editReply from the previous deferred state
     await interaction.editReply({ content: `Ticket created: ${channel}`, components: [] });
     
   } catch (error) {
     console.error('Error creating ticket channel:', error);
     delete cooldowns[user.id];
-    // Attempt to send an error reply to the user if the channel creation failed
+    
     if (interaction.deferred || interaction.replied) {
-      // CRITICAL FIX: Ensure editReply is called with the error message
       await interaction.editReply({ content: 'Failed to create ticket channel due to a server error. Check the bot console for details on permissions or category key.', components: [] });
     } else {
       await interaction.reply({ content: 'Failed to create ticket channel due to a server error. Please try again later.', ephemeral: true });
