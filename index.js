@@ -1,6 +1,6 @@
 // ===================
-// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V6)
-// FIXES: Select menu option value length, ensuring all multi-step tickets work.
+// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V7)
+// FIXES: Select menu label/value constraints violation (the 'Unexpected error' on subtopic categories).
 // ===================
 
 import {
@@ -92,7 +92,7 @@ let stoppedSubtopics = {};
 
 // ===================
 // CATEGORIES & SUBTOPICS
-// IMPORTANT CHANGE: Added 'key' to subtopics for Discord's 100 char limit on select menu values.
+// IMPORTANT: 'key' is used for select menu value. 'value' is the full description.
 // ===================
 const categories = {
   moderation: {
@@ -125,6 +125,7 @@ const categories = {
       { key: 'prize_claim', label: 'Prize claim', value: 'Claiming your prize after winning an event, usually hosted in <#1402405455669497957> or <#1402405468793602158>.' },
     ],
   },
+  // Ensure General has the correct support team role.
   general: { name: 'General', key: 'general', role: IDs.supportTeam, emoji: '<:flower_blue:1415086940306276424>', subtopics: null }, 
   leadership: { name: 'Leadership', key: 'leadership', role: IDs.leadership, emoji: '<:flower_green:1437121005821759688>', subtopics: null },
 };
@@ -256,15 +257,19 @@ client.on('interactionCreate', async interaction => {
       
       // If subtopics exist, show the select menu
       if (category.subtopics) {
-        // CRITICAL FIX: Use the short 'key' for the select menu value, not the long 'value' (description)
+        
+        // Final Fix: Building the select menu options robustly
+        const menuOptions = category.subtopics.map(s => ({ 
+            label: s.label.substring(0, 100), // Ensure label is max 100 chars
+            value: s.key.substring(0, 100),   // Ensure key is max 100 chars
+            description: s.value.substring(0, 100) // Add description to give context
+        }));
+        
         const menu = new ActionRowBuilder().addComponents(
           new StringSelectMenuBuilder()
             .setCustomId(`subtopic_${catKey}`)
             .setPlaceholder('Select the issue')
-            .addOptions(category.subtopics.map(s => ({ 
-                label: s.label, 
-                value: s.key // Use the short, unique key here
-            })))
+            .addOptions(menuOptions)
         );
         return interaction.editReply({ content: 'Please select a subtopic for your ticket.', components: [menu] });
       }
@@ -279,6 +284,7 @@ client.on('interactionCreate', async interaction => {
 
     } catch (error) {
         console.error('Error in category button interaction:', error);
+        // This is the error message the user is seeing.
         interaction.editReply({ content: 'An unexpected error occurred during ticket creation. (Check bot permissions and category key in config.)' }).catch(() => {});
     }
   }
@@ -306,7 +312,6 @@ client.on('interactionCreate', async interaction => {
         return interaction.editReply({ content: `You are on cooldown. Please wait ${COOLDOWN_SECONDS} seconds before opening another ticket.`, components: [] });
 
       cooldowns[interaction.user.id] = Date.now();
-      // Pass the short key for storage, and the full value for display in the ticket (or look up the label)
       await createTicketChannel(interaction.user, catKey, selectedKey, interaction);
       
     } catch (error) {
