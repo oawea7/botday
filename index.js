@@ -124,7 +124,7 @@ const categories = {
       { label: 'Prize claim', value: 'Claiming your prize after winning an event, usually hosted in <#1402405455669497957> or <#1402405468793602158>.' },
     ],
   },
-  general: { name: 'General', key: 'general', role: null, emoji: '<:flower_blue:1415086940306276424>', subtopics: null },
+  general: { name: 'General', key: 'general', role: IDs.supportTeam, emoji: '<:flower_blue:1415086940306276424>', subtopics: null }, // Added supportTeam ID
   leadership: { name: 'Leadership', key: 'leadership', role: IDs.leadership, emoji: '<:flower_green:1437121005821759688>', subtopics: null },
 };
 
@@ -146,6 +146,7 @@ function hasCooldown(userId) {
 }
 function isStaff(member) {
     if (!member) return false;
+    // Includes supportTeam ID from the categories map + leadership/special checks in the handler
     const staffRoleIds = [IDs.moderation, IDs.staffing, IDs.pr, IDs.supportTeam].filter(id => id);
     return member.roles.cache.some(role => staffRoleIds.includes(role.id));
 }
@@ -229,7 +230,7 @@ client.on('interactionCreate', async interaction => {
   // 1. CATEGORY BUTTONS (Initial Ticket Request)
   // ===================
   if (interaction.isButton() && interaction.customId.startsWith('category_')) {
-    // Crucial: Defer the reply immediately to prevent "Interaction Failed"
+    // CRITICAL FIX: Defer the reply immediately to prevent "Interaction Failed"
     await interaction.deferReply({ ephemeral: true });
 
     try {
@@ -243,26 +244,26 @@ client.on('interactionCreate', async interaction => {
       
       // If subtopics exist, show the select menu
       if (category.subtopics) {
-        // We only apply cooldown AFTER a final selection/creation is made
         const menu = new ActionRowBuilder().addComponents(
           new StringSelectMenuBuilder()
             .setCustomId(`subtopic_${catKey}`)
             .setPlaceholder('Select the issue')
             .addOptions(category.subtopics.map(s => ({ label: s.label, value: s.value })))
         );
-        // Use followUp if deferReply was used, or editReply if that was the last action
         return interaction.editReply({ content: 'Please select a subtopic for your ticket.', components: [menu] });
       }
 
-      // If no subtopics (General/Leadership), apply cooldown and create ticket immediately
+      // If no subtopics (General/Leadership), CHECK cooldown and create ticket immediately
       if (hasCooldown(interaction.user.id))
         return interaction.editReply({ content: `You are on cooldown. Please wait ${COOLDOWN_SECONDS} seconds before opening another ticket.` });
 
+      // Apply cooldown ONLY after passing the check
       cooldowns[interaction.user.id] = Date.now();
       await createTicketChannel(interaction.user, catKey, null, interaction);
 
     } catch (error) {
         console.error('Error in category button interaction:', error);
+        // CRITICAL FIX: Use editReply since it was deferred
         interaction.editReply({ content: 'An unexpected error occurred during ticket creation. (Check bot permissions and category key in config.)' }).catch(() => {});
     }
   }
@@ -325,7 +326,8 @@ client.on('interactionCreate', async interaction => {
             .setColor(0x32CD32) 
             .setDescription(`✅ <@${interaction.user.id}> **has claimed this ticket** and will assist you shortly.`);
             
-        const firstMessage = (await ticketChannel.messages.fetch({ limit: 1, after: '0' })).first(); 
+        // Find the original ticket message
+        const firstMessage = (await ticketChannel.messages.fetch({ limit: 100 })).find(m => m.embeds.some(e => e.footer?.text?.includes(channelId))); 
 
         if (firstMessage) {
             await firstMessage.reply({ embeds: [claimEmbed] });
@@ -388,6 +390,7 @@ client.on('interactionCreate', async interaction => {
         
         let allMessages = [];
         let lastId;
+        // Fetch all messages (up to a large limit)
         while (true) {
             const messages = await ticketChannel.messages.fetch({ limit: 100, before: lastId });
             allMessages.push(...messages.values());
@@ -591,6 +594,7 @@ async function createTicketChannel(user, categoryKey, subtopic, interaction) {
     );
 
     const roleMention = cat.role ? `<@&${cat.role}>` : '@here';
+    // CONFIRMED FIX: Explicitly mention both the role and the user
     await channel.send({ content: `${roleMention} | <@${user.id}>`, embeds: [embed], components: [row] });
     
     tickets[channel.id] = { user: user.id, category: categoryKey, subtopic: subtopic || null, claimed: null, closed: false, openTime: Date.now() };
@@ -604,7 +608,8 @@ async function createTicketChannel(user, categoryKey, subtopic, interaction) {
     delete cooldowns[user.id];
     // Attempt to send an error reply to the user if the channel creation failed
     if (interaction.deferred || interaction.replied) {
-      await interaction.editReply({ content: 'Failed to create ticket channel due to a server error. Please try again later.', components: [] });
+      // CRITICAL FIX: Ensure editReply is called with the error message
+      await interaction.editReply({ content: 'Failed to create ticket channel due to a server error. Check the bot console for details on permissions or category key.', components: [] });
     } else {
       await interaction.reply({ content: 'Failed to create ticket channel due to a server error. Please try again later.', ephemeral: true });
     }
