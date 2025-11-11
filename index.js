@@ -1,6 +1,6 @@
 // ===================
-// Adalea Tickets v2 Clone - ULTIMATE FINAL FILE
-// FIXES: Button Glitch, Adds Modal for Reason, Updates Transcript Embed.
+// Adalea Tickets v2 Clone - ULTIMATE FINAL FILE (V3)
+// FIXES: Button Glitch, Adds Modal for Reason, Corrected /move command, Removed Transcript Link.
 // ===================
 
 import {
@@ -15,9 +15,9 @@ import {
   PermissionsBitField,
   ChannelType,
   ApplicationCommandOptionType,
-  ModalBuilder, // NEW
-  TextInputBuilder, // NEW
-  TextInputStyle, // NEW
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from 'discord.js';
 import fs from 'fs';
 import express from 'express';
@@ -96,6 +96,7 @@ let stoppedSubtopics = {};
 const categories = {
   moderation: {
     name: 'Moderation Support',
+    key: 'moderation',
     role: IDs.moderation,
     emoji: '<:c_flower:1437125663231315988>',
     subtopics: [
@@ -105,6 +106,7 @@ const categories = {
   },
   staffing: {
     name: 'Staffing Enquiries',
+    key: 'staffing',
     role: IDs.staffing,
     emoji: '<:flower_yellow:1437121213796188221>',
     subtopics: [
@@ -114,6 +116,7 @@ const categories = {
   },
   pr: {
     name: 'Public Relations Enquiries',
+    key: 'pr',
     role: IDs.pr,
     emoji: '<:flower_pink:1437121075086622903>',
     subtopics: [
@@ -121,9 +124,14 @@ const categories = {
       { label: 'Prize claim', value: 'Claiming your prize after winning an event, usually hosted in <#1402405455669497957> or <#1402405468793602158>.' },
     ],
   },
-  general: { name: 'General', role: null, emoji: '<:flower_blue:1415086940306276424>', subtopics: null },
-  leadership: { name: 'Leadership', role: IDs.leadership, emoji: '<:flower_green:1437121005821759688>', subtopics: null },
+  general: { name: 'General', key: 'general', role: null, emoji: '<:flower_blue:1415086940306276424>', subtopics: null },
+  leadership: { name: 'Leadership', key: 'leadership', role: IDs.leadership, emoji: '<:flower_green:1437121005821759688>', subtopics: null },
 };
+
+// Helper function to get a category object by its key
+const getCategoryByKey = (key) => categories[key];
+// Helper function to get a category object by its role ID
+const getCategoryByRole = (roleId) => Object.values(categories).find(c => c.role === roleId);
 
 // ===================
 // HELPER FUNCTIONS
@@ -224,7 +232,7 @@ client.on('interactionCreate', async interaction => {
   // ===================
   if (interaction.isButton() && interaction.customId.startsWith('category_')) {
     await interaction.deferReply({ ephemeral: true });
-
+    // ... (Category button logic remains the same)
     try {
       const rawCatName = interaction.customId.replace('category_', '');
       const catKey = Object.keys(categories).find(k => categories[k].name.toLowerCase().replace(/\s/g, '-') === rawCatName);
@@ -261,7 +269,7 @@ client.on('interactionCreate', async interaction => {
   // ===================
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('subtopic_')) {
     await interaction.deferUpdate();
-
+    // ... (Subtopic selection logic remains the same)
     try {
       const catKey = interaction.customId.replace('subtopic_', '');
       const selected = interaction.values[0];
@@ -392,7 +400,7 @@ client.on('interactionCreate', async interaction => {
 
         const logChannel = await client.channels.fetch(IDs.transcriptLog).catch(() => null);
         
-        // --- UPDATED TRANSCRIPT EMBED (Includes Reason) ---
+        // --- FINAL TRANSCRIPT EMBED (NO LINK BUTTON) ---
         const transcriptEmbed = new EmbedBuilder()
             .setColor(0xFFA500)
             .setTitle('🎫 Ticket Closed')
@@ -403,22 +411,13 @@ client.on('interactionCreate', async interaction => {
                 { name: 'Open Time', value: `<t:${Math.floor(ticket.openTime / 1000)}:f>`, inline: true },
                 { name: 'Claimed By', value: ticket.claimed ? `<@${ticket.claimed}>` : 'Unclaimed', inline: true },
                 { name: 'Category', value: categories[ticket.category]?.name || 'N/A', inline: true },
-                { name: 'Reason', value: reason || 'N/A', inline: false } // NEW REASON FIELD
+                { name: 'Reason', value: reason || 'N/A', inline: false }
             )
             .setFooter({ text: ticketChannel.name });
-
-        // Placeholder for Online Transcript Button (Requires external hosting)
-        const onlineTranscriptRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setLabel('View Online Transcript')
-                .setURL('https://example.com/transcript-not-implemented') // Placeholder URL
-                .setStyle(ButtonStyle.Link)
-        );
 
         if (logChannel) {
             await logChannel.send({ 
                 embeds: [transcriptEmbed],
-                components: [onlineTranscriptRow], // ADDED ONLINE TRANSCRIPT BUTTON
                 files: [{ attachment: transcriptPath, name: `${ticketChannel.name}.txt` }] 
             }).catch(e => console.error('Failed to send log message:', e));
         }
@@ -459,7 +458,6 @@ client.on('interactionCreate', async interaction => {
   // 5. SLASH COMMANDS /add /remove /move
   // ===================
   if (interaction.isChatInputCommand()) {
-    // ... (Slash command logic remains the same as previous version)
     const member = interaction.member;
     const isLeaderOrSpecial = member.roles.cache.has(IDs.leadership) || interaction.user.id === IDs.special;
     const isStaffOrTicketCreator = isStaff(member) || (tickets[interaction.channelId]?.user === interaction.user.id);
@@ -483,30 +481,52 @@ client.on('interactionCreate', async interaction => {
         await channel.permissionOverwrites.edit(user.id, { ViewChannel: false });
         return interaction.reply({ content: `${user.tag} has been **removed** from the ticket.`, ephemeral: false });
       }
+      
+      // --- FIXED /MOVE LOGIC ---
       if (subcommand === 'move') {
-        const targetCategory = interaction.options.getChannel('category');
-        if (!targetCategory || targetCategory.type !== ChannelType.GuildCategory) return interaction.reply({ content: 'Invalid category. Please select a category channel.', ephemeral: true });
+        const newCategoryKey = interaction.options.getString('category_key');
+        const newCat = getCategoryByKey(newCategoryKey);
         
-        const oldCatKey = tickets[channel.id].category;
-        const newCatKey = Object.keys(categories).find(k => categories[k].name.toLowerCase() === targetCategory.name.toLowerCase());
-
-        const newRole = categories[newCatKey]?.role;
-        
-        if (newRole) {
-            const oldRole = categories[oldCatKey]?.role;
-            if (oldRole && oldRole !== newRole) {
-                await channel.permissionOverwrites.edit(oldRole, { ViewChannel: false, SendMessages: false });
-            }
-            await channel.permissionOverwrites.edit(newRole, { ViewChannel: true, SendMessages: true });
+        if (!newCat) {
+             return interaction.reply({ content: `Invalid category key. Must be one of: ${Object.keys(categories).join(', ')}.`, ephemeral: true });
         }
         
-        await channel.setParent(targetCategory.id);
+        const oldCatKey = tickets[channel.id].category;
+        const oldCat = getCategoryByKey(oldCatKey);
         
-        tickets[channel.id].category = newCatKey || targetCategory.name;
+        // 1. Update Permissions (Remove Old Role Access)
+        if (oldCat?.role) {
+            await channel.permissionOverwrites.edit(oldCat.role, { ViewChannel: false, SendMessages: false });
+        }
+
+        // 2. Update Permissions (Grant New Role Access)
+        if (newCat.role) {
+            await channel.permissionOverwrites.edit(newCat.role, { ViewChannel: true, SendMessages: true });
+        }
+
+        // 3. Update Channel Category Parent
+        await channel.setParent(IDs.ticketCategory, { lockPermissions: false });
+        
+        // 4. Update Ticket Storage
+        tickets[channel.id].category = newCategoryKey;
         saveTickets();
         
-        return interaction.reply({ content: `Ticket successfully **moved** to the **${targetCategory.name}** category.`, ephemeral: false });
+        // 5. Send Embed Notification
+        const moveEmbed = new EmbedBuilder()
+            .setColor(0x0099FF)
+            .setDescription(`🎫 Ticket has been moved by <@${interaction.user.id}> from **${oldCat?.name || 'N/A'}** to **${newCat.name}**.`);
+        
+        const roleMention = newCat.role ? `<@&${newCat.role}>` : '@here';
+        
+        await interaction.channel.send({ 
+            content: `${roleMention} | <@${tickets[channel.id].user}>`, 
+            embeds: [moveEmbed] 
+        });
+        
+        return interaction.reply({ content: `Ticket successfully **moved** to the **${newCat.name}** team.`, ephemeral: true });
       }
+      // --- END FIXED /MOVE LOGIC ---
+
     } catch (error) {
         console.error(`Error in /${subcommand} command:`, error);
         interaction.reply({ content: `An error occurred while executing the command.`, ephemeral: true }).catch(() => {});
@@ -610,15 +630,18 @@ const commands = [
             },
             {
                 name: 'move',
-                description: 'Move the ticket to a different category.',
+                description: 'Move the ticket to a different team/category.',
                 type: ApplicationCommandOptionType.Subcommand,
                 options: [
                     {
-                        name: 'category',
-                        description: 'The target category to move the ticket to.',
-                        type: ApplicationCommandOptionType.Channel,
-                        channel_types: [ChannelType.GuildCategory],
+                        name: 'category_key', // Now takes a string key, not a channel object
+                        description: 'The key of the new team (e.g., moderation, staffing, pr).',
+                        type: ApplicationCommandOptionType.String,
                         required: true,
+                        choices: Object.values(categories).map(c => ({
+                            name: c.name,
+                            value: c.key // Use the internal key
+                        }))
                     },
                 ],
             },
