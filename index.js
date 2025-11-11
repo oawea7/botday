@@ -1,6 +1,6 @@
 // ===================
-// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE
-// Includes all bug fixes, Guild ID registration, and error handling.
+// Adalea Tickets v2 Clone - ULTIMATE FINAL FILE
+// FIXES: Button Glitch, Adds Modal for Reason, Updates Transcript Embed.
 // ===================
 
 import {
@@ -15,6 +15,9 @@ import {
   PermissionsBitField,
   ChannelType,
   ApplicationCommandOptionType,
+  ModalBuilder, // NEW
+  TextInputBuilder, // NEW
+  TextInputStyle, // NEW
 } from 'discord.js';
 import fs from 'fs';
 import express from 'express';
@@ -210,14 +213,14 @@ client.on('messageCreate', async message => {
   }
 });
 
-// ===================
-// INTERACTION HANDLER - CATEGORY BUTTONS & SUBTOPICS & SLASH COMMANDS
-// ===================
+// =========================================================================================
+// INTERACTION HANDLER - CATEGORY BUTTONS, SUBTOPICS, MODAL SUBMISSIONS, SLASH COMMANDS, etc.
+// =========================================================================================
 client.on('interactionCreate', async interaction => {
-  if (!interaction.isButton() && !interaction.isStringSelectMenu() && !interaction.isChatInputCommand()) return;
+  if (!interaction.isButton() && !interaction.isStringSelectMenu() && !interaction.isChatInputCommand() && !interaction.isModalSubmit()) return;
 
   // ===================
-  // CATEGORY BUTTONS - Defer Reply immediately
+  // 1. CATEGORY BUTTONS
   // ===================
   if (interaction.isButton() && interaction.customId.startsWith('category_')) {
     await interaction.deferReply({ ephemeral: true });
@@ -254,7 +257,7 @@ client.on('interactionCreate', async interaction => {
   }
 
   // ===================
-  // SUBTOPIC SELECTION - Defer Reply for component interaction
+  // 2. SUBTOPIC SELECTION
   // ===================
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('subtopic_')) {
     await interaction.deferUpdate();
@@ -271,11 +274,192 @@ client.on('interactionCreate', async interaction => {
         interaction.editReply({ content: 'An unexpected error occurred after selecting the subtopic.', components: [] }).catch(() => {});
     }
   }
+
+  // ===================
+  // 3. CLAIM & CLOSE BUTTONS
+  // ===================
+  if (interaction.isButton() && (interaction.customId.startsWith('claim_') || interaction.customId.startsWith('close_'))) {
+    
+    const [action, channelId] = interaction.customId.split('_');
+    const ticket = tickets[channelId];
+    
+    // FIX for the "Ticket data not found" glitch from malformed interactions
+    if (!ticket) return interaction.reply({ content: 'Ticket data not found in storage. Cannot proceed.', ephemeral: true });
+
+    const ticketChannel = interaction.guild.channels.cache.get(channelId) || await client.channels.fetch(channelId).catch(() => null);
+    if (!ticketChannel) {
+        delete tickets[channelId];
+        saveTickets();
+        return interaction.reply({ content: 'The ticket channel was not found (likely already deleted). Removed from storage.', ephemeral: true });
+    }
+
+    const member = interaction.member || await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+    const isStaffMember = isStaff(member) || member?.roles.cache.has(IDs.leadership);
+
+    if (action === 'claim') {
+        if (!isStaffMember) return interaction.reply({ content: 'Only staff and leadership can claim tickets.', ephemeral: true });
+        if (ticket.claimed) return interaction.reply({ content: `This ticket is already claimed by <@${ticket.claimed}>.`, ephemeral: true });
+        
+        ticket.claimed = interaction.user.id;
+        saveTickets();
+
+        const claimEmbed = new EmbedBuilder()
+            .setColor(0x32CD32) 
+            .setDescription(`✅ <@${interaction.user.id}> **has claimed this ticket** and will assist you shortly.`);
+            
+        const firstMessage = (await ticketChannel.messages.fetch({ limit: 1, after: '0' })).first(); 
+
+        if (firstMessage) {
+            await firstMessage.reply({ embeds: [claimEmbed] });
+        } else {
+            await ticketChannel.send({ embeds: [claimEmbed] });
+        }
+        
+        const newRow = ActionRowBuilder.from(interaction.message.components[0]).setComponents(
+            ButtonBuilder.from(interaction.message.components[0].components.find(c => c.customId.startsWith('claim'))).setDisabled(true),
+            ButtonBuilder.from(interaction.message.components[0].components.find(c => c.customId.startsWith('close'))).setDisabled(false)
+        );
+        await interaction.message.edit({ components: [newRow] });
+        
+        return interaction.reply({ content: 'Ticket claimed successfully!', ephemeral: true });
+    }
+
+    if (action === 'close') {
+        if (!isStaffMember && ticket.user !== interaction.user.id) {
+            return interaction.reply({ content: 'Only staff/leadership or the original ticket creator can close this ticket.', ephemeral: true });
+        }
+        if (ticket.closed) return interaction.reply({ content: 'This ticket is already in the process of closing.', ephemeral: true });
+
+        // SHOW MODAL FOR REASON INPUT
+        const modal = new ModalBuilder()
+            .setCustomId(`close_modal_${channelId}`)
+            .setTitle('Close Ticket');
+
+        const reasonInput = new TextInputBuilder()
+            .setCustomId('close_reason')
+            .setLabel('Reason for closing this ticket')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true);
+
+        modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
+        return interaction.showModal(modal);
+    }
+  }
+
+  // ===================
+  // 4. MODAL SUBMISSION (Ticket Close Confirmation)
+  // ===================
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('close_modal_')) {
+    const channelId = interaction.customId.replace('close_modal_', '');
+    const reason = interaction.fields.getTextInputValue('close_reason');
+    const ticket = tickets[channelId];
+
+    if (!ticket) return interaction.reply({ content: 'Ticket data not found in storage. Cannot proceed.', ephemeral: true });
+    if (ticket.closed) return interaction.reply({ content: 'This ticket is already closed.', ephemeral: true });
+    
+    ticket.closed = true;
+    saveTickets();
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const ticketChannel = interaction.guild.channels.cache.get(channelId) || await client.channels.fetch(channelId).catch(() => null);
+    const member = interaction.member || await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+
+    try {
+        // --- TRANSCRIPT GENERATION ---
+        let transcript = `--- Adalea Ticket Transcript ---\nTicket Creator: ${client.users.cache.get(ticket.user)?.tag || 'Unknown User'}\nCategory: ${categories[ticket.category]?.name || 'N/A'}\nSubtopic: ${tickets[channelId].subtopic || 'N/A'}\nClosed By: ${interaction.user.tag}\nClosed At: ${new Date().toISOString()}\nReason: ${reason}\n--- Conversation ---\n`;
+        
+        // ... (Message fetch logic remains the same)
+        let allMessages = [];
+        let lastId;
+        while (true) {
+            const messages = await ticketChannel.messages.fetch({ limit: 100, before: lastId });
+            allMessages.push(...messages.values());
+            if (messages.size < 100) break;
+            lastId = messages.last()?.id;
+        }
+
+        const sorted = allMessages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+        sorted.forEach(msg => {
+            transcript += `[${new Date(msg.createdTimestamp).toLocaleString()} | ${msg.author.tag}]: ${msg.content || '[No Content]'}\n`;
+            if (msg.attachments.size > 0) {
+                msg.attachments.forEach(att => transcript += `[Attachment]: ${att.url}\n`);
+            }
+        });
+
+        const transcriptPath = `./transcript-${channelId}.txt`;
+        fs.writeFileSync(transcriptPath, transcript);
+
+        const logChannel = await client.channels.fetch(IDs.transcriptLog).catch(() => null);
+        
+        // --- UPDATED TRANSCRIPT EMBED (Includes Reason) ---
+        const transcriptEmbed = new EmbedBuilder()
+            .setColor(0xFFA500)
+            .setTitle('🎫 Ticket Closed')
+            .addFields(
+                { name: 'Ticket ID', value: `\`${channelId}\``, inline: true },
+                { name: 'Opened By', value: `<@${ticket.user}>`, inline: true },
+                { name: 'Closed By', value: `<@${interaction.user.id}>`, inline: true },
+                { name: 'Open Time', value: `<t:${Math.floor(ticket.openTime / 1000)}:f>`, inline: true },
+                { name: 'Claimed By', value: ticket.claimed ? `<@${ticket.claimed}>` : 'Unclaimed', inline: true },
+                { name: 'Category', value: categories[ticket.category]?.name || 'N/A', inline: true },
+                { name: 'Reason', value: reason || 'N/A', inline: false } // NEW REASON FIELD
+            )
+            .setFooter({ text: ticketChannel.name });
+
+        // Placeholder for Online Transcript Button (Requires external hosting)
+        const onlineTranscriptRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setLabel('View Online Transcript')
+                .setURL('https://example.com/transcript-not-implemented') // Placeholder URL
+                .setStyle(ButtonStyle.Link)
+        );
+
+        if (logChannel) {
+            await logChannel.send({ 
+                embeds: [transcriptEmbed],
+                components: [onlineTranscriptRow], // ADDED ONLINE TRANSCRIPT BUTTON
+                files: [{ attachment: transcriptPath, name: `${ticketChannel.name}.txt` }] 
+            }).catch(e => console.error('Failed to send log message:', e));
+        }
+        
+        fs.unlinkSync(transcriptPath); 
+        
+        // DM to the ticket creator
+        try {
+            const creator = await client.users.fetch(ticket.user);
+            await creator.send({
+                content: `Your ticket, **${ticketChannel.name}**, has been closed by **${interaction.user.tag}**.\nReason: **${reason}**\nThank you for reaching out to Adalea Support!`,
+                files: logChannel ? [{ attachment: transcriptPath, name: `${ticketChannel.name}.txt` }] : []
+            }).catch(() => console.log('Could not DM ticket creator.'));
+        } catch (e) {
+            console.error('Error sending DM to creator:', e);
+        }
+
+        // Final deletion of the channel
+        await interaction.editReply({ content: 'Ticket closed, transcript saved, and reason logged. Deleting channel...', ephemeral: true });
+        
+        delete tickets[channelId];
+        saveTickets();
+        
+        await ticketChannel.delete(`Ticket closed by ${interaction.user.tag}. Reason: ${reason}`).catch(e => {
+            console.error(`Failed to delete channel ${channelId}:`, e);
+            interaction.channel.send('⚠️ **ERROR:** Failed to delete the ticket channel. Please delete it manually.').catch(() => {});
+        });
+        
+    } catch (error) {
+        console.error('CRITICAL Error in close action:', error);
+        await interaction.editReply({ content: 'A critical error occurred during closing/transcript process. Check console for details.', ephemeral: true });
+        ticket.closed = false;
+        saveTickets();
+    }
+  }
   
   // ===================
-  // SLASH COMMANDS /add /remove /move
+  // 5. SLASH COMMANDS /add /remove /move
   // ===================
   if (interaction.isChatInputCommand()) {
+    // ... (Slash command logic remains the same as previous version)
     const member = interaction.member;
     const isLeaderOrSpecial = member.roles.cache.has(IDs.leadership) || interaction.user.id === IDs.special;
     const isStaffOrTicketCreator = isStaff(member) || (tickets[interaction.channelId]?.user === interaction.user.id);
@@ -349,7 +533,6 @@ async function createTicketChannel(user, categoryKey, subtopic, interaction) {
       { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
       ...(cat.role ? [{ id: cat.role, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }] : []),
       { id: IDs.leadership, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-      // Bot must have ManageChannels in the category to delete/set parent
       { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ManageChannels] }
     ];
 
@@ -390,145 +573,6 @@ async function createTicketChannel(user, categoryKey, subtopic, interaction) {
     }
   }
 }
-
-// ===================
-// CLAIM & CLOSE HANDLER
-// ===================
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isButton()) return;
-  const [action, channelId] = interaction.customId.split('_');
-  const ticket = tickets[channelId];
-  if (!ticket) return interaction.reply({ content: 'Ticket data not found in storage. Cannot proceed.', ephemeral: true });
-
-  const ticketChannel = interaction.guild.channels.cache.get(channelId) || await client.channels.fetch(channelId).catch(() => null);
-  
-  if (!ticketChannel) {
-    delete tickets[channelId];
-    saveTickets();
-    return interaction.reply({ content: 'The ticket channel was not found (likely already deleted). Removed from storage.', ephemeral: true });
-  }
-
-  const member = interaction.member || await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-  const isStaffMember = isStaff(member) || member?.roles.cache.has(IDs.leadership);
-  
-  if (action === 'claim') {
-    if (!isStaffMember) return interaction.reply({ content: 'Only staff and leadership can claim tickets.', ephemeral: true });
-    if (ticket.claimed) return interaction.reply({ content: `This ticket is already claimed by <@${ticket.claimed}>.`, ephemeral: true });
-    
-    ticket.claimed = interaction.user.id;
-    saveTickets();
-
-    const claimEmbed = new EmbedBuilder()
-        .setColor(0x32CD32) 
-        .setDescription(`✅ <@${interaction.user.id}> **has claimed this ticket** and will assist you shortly.`);
-        
-    const firstMessage = (await ticketChannel.messages.fetch({ limit: 1, after: '0' })).first(); 
-
-    if (firstMessage) {
-        await firstMessage.reply({ embeds: [claimEmbed] });
-    } else {
-        await ticketChannel.send({ embeds: [claimEmbed] });
-    }
-    
-    const newRow = ActionRowBuilder.from(interaction.message.components[0]).setComponents(
-        ButtonBuilder.from(interaction.message.components[0].components.find(c => c.customId.startsWith('claim'))).setDisabled(true),
-        ButtonBuilder.from(interaction.message.components[0].components.find(c => c.customId.startsWith('close'))).setDisabled(false)
-    );
-    await interaction.message.edit({ components: [newRow] });
-    
-    return interaction.reply({ content: 'Ticket claimed successfully!', ephemeral: true });
-  }
-
-  if (action === 'close') {
-    if (!isStaffMember && ticket.user !== interaction.user.id) {
-        return interaction.reply({ content: 'Only staff/leadership or the original ticket creator can close this ticket.', ephemeral: true });
-    }
-
-    if (ticket.closed) return interaction.reply({ content: 'This ticket is already in the process of closing.', ephemeral: true });
-    ticket.closed = true;
-    saveTickets();
-
-    await interaction.deferReply({ ephemeral: true });
-
-    try {
-        // --- TRANSCRIPT GENERATION ---
-        let transcript = `--- Adalea Ticket Transcript ---\nTicket Creator: ${client.users.cache.get(ticket.user)?.tag || 'Unknown User'}\nCategory: ${categories[ticket.category]?.name || 'N/A'}\nSubtopic: ${tickets[channelId].subtopic || 'N/A'}\nClosed By: ${interaction.user.tag}\nClosed At: ${new Date().toISOString()}\n--- Conversation ---\n`;
-        
-        let allMessages = [];
-        let lastId;
-        while (true) {
-            const messages = await ticketChannel.messages.fetch({ limit: 100, before: lastId });
-            allMessages.push(...messages.values());
-            if (messages.size < 100) break;
-            lastId = messages.last()?.id;
-        }
-
-        const sorted = allMessages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-        sorted.forEach(msg => {
-            transcript += `[${new Date(msg.createdTimestamp).toLocaleString()} | ${msg.author.tag}]: ${msg.content || '[No Content]'}\n`;
-            if (msg.attachments.size > 0) {
-                msg.attachments.forEach(att => transcript += `[Attachment]: ${att.url}\n`);
-            }
-        });
-
-        const transcriptPath = `./transcript-${channelId}.txt`;
-        fs.writeFileSync(transcriptPath, transcript);
-
-        const logChannel = await client.channels.fetch(IDs.transcriptLog).catch(() => null);
-        
-        const transcriptEmbed = new EmbedBuilder()
-            .setColor(0xFFA500)
-            .setTitle('🎫 Ticket Closed')
-            .addFields(
-                { name: 'Ticket ID', value: `\`${channelId}\``, inline: true },
-                { name: 'Opened By', value: `<@${ticket.user}>`, inline: true },
-                { name: 'Closed By', value: `<@${interaction.user.id}>`, inline: true },
-                { name: 'Open Time', value: `<t:${Math.floor(ticket.openTime / 1000)}:f>`, inline: true },
-                { name: 'Claimed By', value: ticket.claimed ? `<@${ticket.claimed}>` : 'Unclaimed', inline: true },
-                { name: 'Category', value: categories[ticket.category]?.name || 'N/A', inline: true },
-            )
-            .setFooter({ text: ticketChannel.name });
-
-        if (logChannel) {
-            await logChannel.send({ 
-                embeds: [transcriptEmbed],
-                files: [{ attachment: transcriptPath, name: `${ticketChannel.name}.txt` }] 
-            }).catch(e => console.error('Failed to send log message:', e));
-        }
-        
-        fs.unlinkSync(transcriptPath); 
-        
-        // DM to the ticket creator
-        try {
-            const creator = await client.users.fetch(ticket.user);
-            await creator.send({
-                content: `Your ticket, **${ticketChannel.name}**, has been closed by **${interaction.user.tag}**.\nThank you for reaching out to Adalea Support!`,
-                files: logChannel ? [{ attachment: transcriptPath, name: `${ticketChannel.name}.txt` }] : []
-            }).catch(() => console.log('Could not DM ticket creator.'));
-        } catch (e) {
-            console.error('Error sending DM to creator:', e);
-        }
-
-        // Final deletion of the channel
-        await interaction.editReply({ content: 'Ticket closed and transcript saved. Deleting channel...', ephemeral: true });
-        
-        delete tickets[channelId];
-        saveTickets();
-        
-        await ticketChannel.delete('Ticket closed by user/staff.').catch(e => {
-            console.error(`Failed to delete channel ${channelId}:`, e);
-            interaction.channel.send('⚠️ **ERROR:** Failed to delete the ticket channel. Please delete it manually.').catch(() => {});
-        });
-        
-
-    } catch (error) {
-        console.error('CRITICAL Error in close action:', error);
-        await interaction.editReply({ content: 'A critical error occurred during closing/transcript process. Check console for details.', ephemeral: true });
-        ticket.closed = false;
-        saveTickets();
-    }
-  }
-});
 
 // ===================
 // SLASH COMMAND REGISTRATION
@@ -582,7 +626,6 @@ const commands = [
     },
 ];
 
-// FIX: Change 'ready' to 'clientReady' and use the fixed Guild ID for fast registration.
 client.once('clientReady', async () => {
     console.log(`${client.user.tag} is online and ready.`);
     
@@ -593,7 +636,6 @@ client.once('clientReady', async () => {
             console.log(`Slash commands registered successfully to Guild: ${IDs.GUILD}`);
         } else {
             console.error(`ERROR: Guild ID ${IDs.GUILD} not found. Is the bot in the server?`);
-            // Fallback to global if guild fails
             await client.application.commands.set(commands);
             console.log('Slash commands registered globally (may take up to 1 hour).');
         }
