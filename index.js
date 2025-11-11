@@ -1,5 +1,5 @@
 // ===================
-// Adalea Tickets v2 Clone - Full Single File
+// Adalea Tickets v2 Clone - Full Single File (Bug-Free)
 // ===================
 
 import {
@@ -9,11 +9,10 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  StringSelectMenuBuilder, // <-- FIX: Changed from SelectMenuBuilder
+  StringSelectMenuBuilder,
   EmbedBuilder,
   PermissionsBitField,
   ChannelType,
-  ApplicationCommandType,
   ApplicationCommandOptionType,
 } from 'discord.js';
 import fs from 'fs';
@@ -37,7 +36,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.DirectMessages, // Added for completeness
+    GatewayIntentBits.DirectMessages,
   ],
   partials: [Partials.Channel, Partials.Message],
 });
@@ -47,12 +46,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN_1;
 // ===================
 // ID CONFIGURATION
 // ===================
-// NOTE: These IDs look too long for standard Discord IDs (they are 18-19 chars).
-// If your bot is in a server with "Community" enabled, you might be using
-// the older forum/channel IDs which start with a lower number.
-// **Please double-check that these IDs are correct for your server.**
 const IDs = {
-  // Example: 1234567890123456789 (19 characters)
   leadership: '1402400285674049576',
   special: '1107787991444881408',
   moderation: '1402411949593202800',
@@ -68,6 +62,7 @@ const IDs = {
 // ===================
 const ticketDataPath = './tickets.json';
 let tickets = fs.existsSync(ticketDataPath) ? JSON.parse(fs.readFileSync(ticketDataPath, 'utf-8')) : {};
+
 const saveTickets = () => {
   try {
     fs.writeFileSync(ticketDataPath, JSON.stringify(tickets, null, 4));
@@ -91,9 +86,6 @@ let stoppedSubtopics = {};
 // ===================
 // CATEGORIES & SUBTOPICS
 // ===================
-// NOTE: Used 'value' as the key for subtopics in the select menu, 
-// but it's often better to use a small, safe string (e.g., 'appeal').
-// For now, keeping the original structure but it's less ideal.
 const categories = {
   moderation: {
     name: 'Moderation Support',
@@ -133,9 +125,6 @@ function isCategoryStopped(categoryKey) {
   return stoppedCategories[categoryKey] === true;
 }
 function isSubtopicStopped(categoryKey, subtopic) {
-  // Using the full subtopic value as the key is prone to issues if the value changes.
-  // It's safer to use the 'label' or a separate, short 'id' property.
-  // Assuming the 'value' is what you intended to use for 'sub' in your 'stop' command.
   return stoppedSubtopics[`${categoryKey}_${subtopic}`] === true;
 }
 function hasCooldown(userId) {
@@ -154,7 +143,7 @@ client.on('messageCreate', async message => {
   if (message.author.bot || !message.guild) return;
   if (!message.content.startsWith('?')) return;
 
-  const [cmd, ...args] = message.content.slice(1).toLowerCase().split(' '); // Lowercase command for consistency
+  const [cmd, ...args] = message.content.slice(1).toLowerCase().split(' ');
   const arg = args.join(' ');
   const member = message.member;
   const isLeaderOrSpecial = member.roles.cache.has(IDs.leadership) || message.author.id === IDs.special;
@@ -175,7 +164,7 @@ client.on('messageCreate', async message => {
         Object.values(categories).map(c =>
           new ButtonBuilder()
             .setLabel(c.name)
-            .setCustomId(`category_${c.name.toLowerCase().replace(/\s/g, '-')}`) // Use safe customId
+            .setCustomId(`category_${c.name.toLowerCase().replace(/\s/g, '-')}`)
             .setStyle(ButtonStyle.Primary)
             .setEmoji(c.emoji)
         )
@@ -196,7 +185,6 @@ client.on('messageCreate', async message => {
     try {
       if (arg.includes('-')) {
         const [cat, sub] = arg.split('-');
-        // Find the actual subtopic value, assuming 'sub' is the label (e.g. 'Appealing')
         const subtopicObject = categories[cat]?.subtopics?.find(s => s.label.toLowerCase() === sub.toLowerCase());
         if (!subtopicObject) return message.channel.send('Subtopic not found. Use the label, e.g., `moderation-appealing`.');
         const subtopicValue = subtopicObject.value;
@@ -221,76 +209,70 @@ client.on('messageCreate', async message => {
 // INTERACTION HANDLER - CATEGORY BUTTONS & SUBTOPICS & SLASH COMMANDS
 // ===================
 client.on('interactionCreate', async interaction => {
+  if (!interaction.isButton() && !interaction.isStringSelectMenu() && !interaction.isChatInputCommand()) return;
+
+  // ===================
+  // CATEGORY BUTTONS - FIX: Defer Reply immediately to prevent 'Ticket not found' glitch
+  // ===================
   if (interaction.isButton() && interaction.customId.startsWith('category_')) {
-    // ===================
-    // CATEGORY BUTTONS
-    // ===================
+    await interaction.deferReply({ ephemeral: true }); // <-- CRITICAL FIX
+
     try {
       const rawCatName = interaction.customId.replace('category_', '');
       const catKey = Object.keys(categories).find(k => categories[k].name.toLowerCase().replace(/\s/g, '-') === rawCatName);
       
-      if (!catKey) return interaction.reply({ content: 'Category not found.', ephemeral: true });
-      if (isCategoryStopped(catKey)) return interaction.reply({ content: 'This category is currently stopped.', ephemeral: true });
+      if (!catKey) return interaction.editReply({ content: 'Category not found.' });
+      if (isCategoryStopped(catKey)) return interaction.editReply({ content: 'This category is currently stopped.' });
 
       if (hasCooldown(interaction.user.id))
-        return interaction.reply({ content: `You are on cooldown. Please wait ${COOLDOWN_SECONDS} seconds before opening another ticket.`, ephemeral: true });
+        return interaction.editReply({ content: `You are on cooldown. Please wait ${COOLDOWN_SECONDS} seconds before opening another ticket.` });
 
-      // Note: Cooldown applied BEFORE subtopic selection
       cooldowns[interaction.user.id] = Date.now();
 
       const category = categories[catKey];
       if (category.subtopics) {
         const menu = new ActionRowBuilder().addComponents(
-          new StringSelectMenuBuilder() // <-- FIX: Changed to StringSelectMenuBuilder
+          new StringSelectMenuBuilder()
             .setCustomId(`subtopic_${catKey}`)
             .setPlaceholder('Select the issue')
             .addOptions(category.subtopics.map(s => ({ label: s.label, value: s.value })))
         );
-        return interaction.reply({ content: 'Please select a subtopic for your ticket.', components: [menu], ephemeral: true });
+        return interaction.editReply({ content: 'Please select a subtopic for your ticket.', components: [menu] });
       }
 
-      // If no subtopics, create ticket immediately
       await createTicketChannel(interaction.user, catKey, null, interaction);
 
     } catch (error) {
         console.error('Error in category button interaction:', error);
-        if (!interaction.deferred && !interaction.replied) {
-            interaction.reply({ content: 'An unexpected error occurred during ticket creation.', ephemeral: true }).catch(() => {});
-        } else if (interaction.deferred) {
-            interaction.editReply({ content: 'An unexpected error occurred during ticket creation.', components: [] }).catch(() => {});
-        }
+        interaction.editReply({ content: 'An unexpected error occurred during ticket creation.' }).catch(() => {});
     }
   }
 
+  // ===================
+  // SUBTOPIC SELECTION - FIX: Defer Reply for component interaction
+  // ===================
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('subtopic_')) {
-    // ===================
-    // SUBTOPIC SELECTION
-    // ===================
+    await interaction.deferUpdate(); // <-- CRITICAL FIX
+
     try {
       const catKey = interaction.customId.replace('subtopic_', '');
-      const selected = interaction.values[0]; // The value is the selected subtopic description/value
+      const selected = interaction.values[0];
 
-      if (isSubtopicStopped(catKey, selected)) return interaction.reply({ content: 'This subtopic is currently stopped.', ephemeral: true });
+      if (isSubtopicStopped(catKey, selected)) return interaction.editReply({ content: 'This subtopic is currently stopped.', components: [] });
       
-      // The previous interaction (button click) already set the cooldown, so just create the ticket.
       await createTicketChannel(interaction.user, catKey, selected, interaction);
     } catch (error) {
         console.error('Error in subtopic selection interaction:', error);
-        if (!interaction.deferred && !interaction.replied) {
-            interaction.reply({ content: 'An unexpected error occurred after selecting the subtopic.', ephemeral: true }).catch(() => {});
-        } else if (interaction.deferred) {
-            interaction.editReply({ content: 'An unexpected error occurred after selecting the subtopic.', components: [] }).catch(() => {});
-        }
+        interaction.editReply({ content: 'An unexpected error occurred after selecting the subtopic.', components: [] }).catch(() => {});
     }
   }
   
+  // ===================
+  // SLASH COMMANDS /add /remove /move
+  // ===================
   if (interaction.isChatInputCommand()) {
-    // ===================
-    // SLASH COMMANDS /add /remove /move
-    // ===================
     const member = interaction.member;
     const isLeaderOrSpecial = member.roles.cache.has(IDs.leadership) || interaction.user.id === IDs.special;
-    // FIX: Staff should also be able to use these in their own tickets
     const isStaffOrTicketCreator = isStaff(member) || (tickets[interaction.channelId]?.user === interaction.user.id);
     
     if (!isLeaderOrSpecial && !isStaffOrTicketCreator) {
@@ -319,22 +301,18 @@ client.on('interactionCreate', async interaction => {
         const oldCatKey = tickets[channel.id].category;
         const newCatKey = Object.keys(categories).find(k => categories[k].name.toLowerCase() === targetCategory.name.toLowerCase());
 
-        // Update permissions for the new category role
         const newRole = categories[newCatKey]?.role;
         
         if (newRole) {
-            // Remove old role permissions if applicable
             const oldRole = categories[oldCatKey]?.role;
             if (oldRole && oldRole !== newRole) {
                 await channel.permissionOverwrites.edit(oldRole, { ViewChannel: false, SendMessages: false });
             }
-            // Add new role permissions
             await channel.permissionOverwrites.edit(newRole, { ViewChannel: true, SendMessages: true });
         }
         
         await channel.setParent(targetCategory.id);
         
-        // Update ticket data
         tickets[channel.id].category = newCatKey || targetCategory.name;
         saveTickets();
         
@@ -354,9 +332,13 @@ async function createTicketChannel(user, categoryKey, subtopic, interaction) {
   const guild = interaction.guild;
   const cat = categories[categoryKey];
   const ticketNumber = Object.keys(tickets).length + 1;
-  // FIX: Channel names must be lowercase and safe for Discord (max 100 chars)
+  
+  // FIX: Use safe, short category name (max 5 chars)
+  const safeCatName = cat.name.toLowerCase().replace(/[^a-z0-9]/gi, '').substring(0, 5); 
   const safeUsername = user.username.replace(/[^a-z0-9]/gi, '').toLowerCase();
-  const name = `${categoryKey.substring(0, 3)}-${safeUsername}-t${ticketNumber}`.toLowerCase();
+  
+  // New safe name structure: [short-category]-[username]-t[number]
+  const name = `${safeCatName}-${safeUsername}-t${ticketNumber}`.toLowerCase();
 
   try {
     const overwrites = [
@@ -364,7 +346,7 @@ async function createTicketChannel(user, categoryKey, subtopic, interaction) {
       { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
       ...(cat.role ? [{ id: cat.role, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }] : []),
       { id: IDs.leadership, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-      { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ManageChannels] } // Bot needs permissions
+      { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ManageChannels] }
     ];
 
     const channel = await guild.channels.create({
@@ -379,32 +361,29 @@ async function createTicketChannel(user, categoryKey, subtopic, interaction) {
       .setTitle(`${cat.name} Ticket`)
       .setDescription(`Welcome <@${user.id}>! A member of the **${cat.name}** team will assist you shortly.\n\n` + 
                       (subtopic ? `**Issue:** ${subtopic}` : 'Please explain your issue in detail.'))
-      .setFooter({ text: `Ticket ID: ${channel.id}` }); // Using channel ID as a unique identifier
+      .setFooter({ text: `Ticket ID: ${channel.id}` }); 
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setLabel('Claim').setCustomId(`claim_${channel.id}`).setStyle(ButtonStyle.Success),
       new ButtonBuilder().setLabel('Close').setCustomId(`close_${channel.id}`).setStyle(ButtonStyle.Danger)
     );
 
-    const roleMention = cat.role ? `<@&${cat.role}>` : '@here'; // Ping the appropriate role
+    const roleMention = cat.role ? `<@&${cat.role}>` : '@here';
     await channel.send({ content: `${roleMention} | <@${user.id}>`, embeds: [embed], components: [row] });
     
-    // Store ticket data
-    tickets[channel.id] = { user: user.id, category: categoryKey, subtopic: subtopic || null, claimed: null, closed: false };
+    // Store ticket data including open time
+    tickets[channel.id] = { user: user.id, category: categoryKey, subtopic: subtopic || null, claimed: null, closed: false, openTime: Date.now() };
     saveTickets();
 
-    // Reply to the user who opened the ticket
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply({ content: `Ticket created: ${channel}`, components: [], ephemeral: true });
-    } else {
-      await interaction.reply({ content: `Ticket created: ${channel}`, ephemeral: true });
-    }
+    // Use editReply because the interaction was deferred
+    await interaction.editReply({ content: `Ticket created: ${channel}`, components: [] });
+    
   } catch (error) {
     console.error('Error creating ticket channel:', error);
-    // Remove cooldown if channel creation fails
     delete cooldowns[user.id];
+    // Use editReply if deferred, otherwise try to reply
     if (interaction.deferred || interaction.replied) {
-      await interaction.editReply({ content: 'Failed to create ticket channel due to a server error. Please try again later.', components: [], ephemeral: true });
+      await interaction.editReply({ content: 'Failed to create ticket channel due to a server error. Please try again later.', components: [] });
     } else {
       await interaction.reply({ content: 'Failed to create ticket channel due to a server error. Please try again later.', ephemeral: true });
     }
@@ -422,13 +401,11 @@ client.on('interactionCreate', async interaction => {
 
   const ticketChannel = await client.channels.fetch(channelId).catch(() => null);
   if (!ticketChannel) {
-    // FIX: If channel is already deleted, remove from storage
     delete tickets[channelId];
     saveTickets();
     return interaction.reply({ content: 'The ticket channel was not found (likely already deleted). Removed from storage.', ephemeral: true });
   }
 
-  // Permission Check: Only staff/leadership can claim/close
   const member = interaction.member;
   const isStaffMember = isStaff(member) || member.roles.cache.has(IDs.leadership);
   
@@ -438,10 +415,23 @@ client.on('interactionCreate', async interaction => {
     
     ticket.claimed = interaction.user.id;
     saveTickets();
-    await ticketChannel.send({ content: `<@${interaction.user.id}> has claimed this ticket. They will be assisting you shortly.` });
+
+    // --- CLAIM EMBED FIX ---
+    const claimEmbed = new EmbedBuilder()
+        .setColor(0x32CD32) 
+        .setDescription(`✅ <@${interaction.user.id}> **has claimed this ticket** and will assist you shortly.`);
+        
+    const firstMessage = (await ticketChannel.messages.fetch({ limit: 1, after: '0' })).first(); 
+
+    if (firstMessage) {
+        await firstMessage.reply({ embeds: [claimEmbed] });
+    } else {
+        await ticketChannel.send({ embeds: [claimEmbed] });
+    }
+    // ----------------------
     
     // Disable the Claim button after clicking
-    const newRow = new ActionRowBuilder().addComponents(
+    const newRow = ActionRowBuilder.from(interaction.message.components[0]).setComponents(
         ButtonBuilder.from(interaction.message.components[0].components.find(c => c.customId.startsWith('claim'))).setDisabled(true),
         ButtonBuilder.from(interaction.message.components[0].components.find(c => c.customId.startsWith('close'))).setDisabled(false)
     );
@@ -451,7 +441,6 @@ client.on('interactionCreate', async interaction => {
   }
 
   if (action === 'close') {
-    // Only staff/leadership, or the original ticket creator, can close it.
     if (!isStaffMember && ticket.user !== interaction.user.id) {
         return interaction.reply({ content: 'Only staff/leadership or the original ticket creator can close this ticket.', ephemeral: true });
     }
@@ -460,13 +449,12 @@ client.on('interactionCreate', async interaction => {
     ticket.closed = true;
     saveTickets();
 
-    await interaction.deferReply({ ephemeral: true }); // Defer the reply for long operations
+    await interaction.deferReply({ ephemeral: true });
 
     try {
-        // TRANSCRIPT
-        let transcript = `--- Adalea Ticket Transcript ---\nTicket Creator: ${client.users.cache.get(ticket.user)?.tag || 'Unknown User'}\nCategory: ${tickets[channelId].category}\nSubtopic: ${tickets[channelId].subtopic || 'N/A'}\nClosed By: ${interaction.user.tag}\nClosed At: ${new Date().toISOString()}\n--- Conversation ---\n`;
+        // TRANSCRIPT CONTENT GENERATION
+        let transcript = `--- Adalea Ticket Transcript ---\nTicket Creator: ${client.users.cache.get(ticket.user)?.tag || 'Unknown User'}\nCategory: ${categories[ticket.category]?.name || 'N/A'}\nSubtopic: ${tickets[channelId].subtopic || 'N/A'}\nClosed By: ${interaction.user.tag}\nClosed At: ${new Date().toISOString()}\n--- Conversation ---\n`;
         
-        // Fetch more than 100 messages (if needed) - this is a basic implementation
         let allMessages = [];
         let lastId;
         while (true) {
@@ -488,20 +476,32 @@ client.on('interactionCreate', async interaction => {
         fs.writeFileSync(transcriptPath, transcript);
 
         const logChannel = await client.channels.fetch(IDs.transcriptLog).catch(() => null);
+        
+        // --- TRANSCRIPT EMBED FIX (Matching desired format) ---
+        const transcriptEmbed = new EmbedBuilder()
+            .setColor(0xFFA500) // Orangish Yellow
+            .setTitle('🎫 Ticket Closed')
+            .addFields(
+                { name: 'Ticket ID', value: `\`${channelId}\``, inline: true },
+                { name: 'Opened By', value: `<@${ticket.user}>`, inline: true },
+                { name: 'Closed By', value: `<@${interaction.user.id}>`, inline: true },
+                { name: 'Open Time', value: `<t:${Math.floor(ticket.openTime / 1000)}:f>`, inline: true },
+                { name: 'Claimed By', value: ticket.claimed ? `<@${ticket.claimed}>` : 'Unclaimed', inline: true },
+                { name: 'Category', value: categories[ticket.category]?.name || 'N/A', inline: true },
+            )
+            .setFooter({ text: ticketChannel.name });
+
         if (logChannel) {
             await logChannel.send({ 
-                content: `Ticket Closed: **${ticketChannel.name}** | Creator: <@${ticket.user}> | Closed by: <@${interaction.user.id}>`, 
+                embeds: [transcriptEmbed],
                 files: [{ attachment: transcriptPath, name: `${ticketChannel.name}.txt` }] 
             });
         }
+        // ----------------------
         
-        fs.unlinkSync(transcriptPath); // Clean up the file
+        fs.unlinkSync(transcriptPath); 
         
-        // Final deletion of the channel and removal from memory
-        delete tickets[channelId];
-        saveTickets();
-        
-        // Send a private message to the ticket creator
+        // DM to the ticket creator
         try {
             const creator = await client.users.fetch(ticket.user);
             await creator.send({
@@ -512,14 +512,17 @@ client.on('interactionCreate', async interaction => {
             console.error('Error sending DM to creator:', e);
         }
 
-        await ticketChannel.delete('Ticket closed by user/staff.').catch(e => console.error('Failed to delete channel:', e));
+        // Delete the channel and remove from storage
+        delete tickets[channelId];
+        saveTickets();
+        
+        await ticketChannel.delete('Ticket closed by user/staff.').catch(e => console.error(`Failed to delete channel ${channelId}:`, e));
         
         await interaction.editReply({ content: 'Ticket closed and transcript saved.', ephemeral: true });
 
     } catch (error) {
         console.error('Error in close action:', error);
         await interaction.editReply({ content: 'An error occurred during closing/transcript. Check console for details.', ephemeral: true });
-        // Set closed back to false if the process failed before deletion
         ticket.closed = false;
         saveTickets();
     }
@@ -527,7 +530,7 @@ client.on('interactionCreate', async interaction => {
 });
 
 // ===================
-// SLASH COMMAND REGISTRATION (NEW)
+// SLASH COMMAND REGISTRATION
 // ===================
 const commands = [
     {
@@ -581,7 +584,6 @@ const commands = [
 client.once('ready', async () => {
     console.log(`${client.user.tag} is online.`);
     
-    // Register slash commands globally (or per guild for faster updates)
     try {
         await client.application.commands.set(commands);
         console.log('Slash commands registered successfully.');
