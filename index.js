@@ -739,5 +739,6 @@ const commands = [
     },
 ];
 
-client.once('clientReady', async () => {
-    console.log(`${cl
+client.once('ready', async () => {
+    console.log(`${client.user.tag} is online!`);
+});
