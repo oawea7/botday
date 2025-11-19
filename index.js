@@ -1,5 +1,5 @@
 // ===================
-// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V15) // FINAL LOGIC AND CODE
+// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V17) // FINAL LOGIC AND CODE
 // ===================
 import {
     Client,
@@ -69,6 +69,15 @@ const IDs = {
 const ticketDataPath = './tickets.json';
 let tickets = fs.existsSync(ticketDataPath) ? JSON.parse(fs.readFileSync(ticketDataPath, 'utf-8')) : {};
 
+// Initialize counters if they don't exist
+if (!tickets.counters) {
+    tickets.counters = {};
+    // Initialize all category counters to 1
+    Object.keys(categories).forEach(key => {
+        tickets.counters[key] = 1;
+    });
+}
+
 const saveTickets = () => {
     try {
         fs.writeFileSync(ticketDataPath, JSON.stringify(tickets, null, 4));
@@ -101,6 +110,8 @@ const categories = {
         subtopics: [
             { key: 'appeal', label: 'Appealing', value: 'Appealing a warning, mute, kick, or server ban.' },
             { key: 'report', label: 'Reporting', value: 'Reporting rule-breaking behaviour within our server.' },
+            { key: 'custom_roles', label: 'Custom Booster Roles', value: 'Inquiries regarding custom roles for server boosters.' },
+            { key: 'other_mod', label: 'Other Mod Enquiry', value: 'Other moderation related enquiries.' }
         ],
     },
     staffing: {
@@ -109,8 +120,9 @@ const categories = {
         role: IDs.staffing,
         emoji: '<:flower_yellow:1437121213796188221>',
         subtopics: [
-            { key: 'staff_report', label: 'Reporting', value: 'Reporting a member of staff, Middle Rank, or High Rank.' },
+            { key: 'staff_report', label: 'Reporting', value: 'Reporting a member of staff, MR, or HR.' },
             { key: 'applications', label: 'Applications', value: 'Applying for a MR or HR position at Adalea.' },
+            { key: 'other_staffing', label: 'Other Staffing Enquiry', value: 'Other staffing related enquiries.' }
         ],
     },
     pr: {
@@ -121,6 +133,7 @@ const categories = {
         subtopics: [
             { key: 'affiliation', label: 'Affiliation', value: 'Forming a partnership between your group and Adalea.' },
             { key: 'prize_claim', label: 'Prize claim', value: 'Claiming your prize after winning an event.' },
+            { key: 'other_pr', label: 'Other PR Enquiry', value: 'Other public relations related enquiries.' }
         ],
     },
     general: { name: 'General', key: 'general', role: IDs.hr, emoji: '<:flower_blue:1415086940306276424>', subtopics: null },
@@ -368,7 +381,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     // ===================
-    // 4. CLOSE MODAL SUBMIT (REVERTED LOGIC)
+    // 4. CLOSE MODAL SUBMIT
     // ===================
     if (interaction.isModalSubmit() && interaction.customId.startsWith('close_modal_')) {
         const channelId = interaction.customId.replace('close_modal_', '');
@@ -403,13 +416,13 @@ client.on('interactionCreate', async interaction => {
                 if (msg.attachments.size) msg.attachments.forEach(a => transcript += `[Attachment]: ${a.url}\n`);
             });
 
-            // Use the channel name for the transcript filename (e.g. "moderation-jvloxrt-t1.txt")
+            // Use the channel name for the transcript filename (e.g. "moderation-001.txt")
             const transcriptFilename = `${ticketChannel.name}.txt`; 
             const transcriptPath = `./${transcriptFilename}`;
             fs.writeFileSync(transcriptPath, transcript);
             const logChannel = await client.channels.fetch(IDs.transcriptLog).catch(() => null);
 
-            // --- 1. LOG CHANNEL EMBED (Simplified, includes all requested fields) ---
+            // --- 1. LOG CHANNEL EMBED ---
             const logEmbed = new EmbedBuilder()
                 .setColor(0xFFA500)
                 .setTitle(`🎟️ Ticket Closed: #${ticketChannel.name}`)
@@ -433,7 +446,7 @@ client.on('interactionCreate', async interaction => {
                 });
             }
 
-            // Send DM to User (as requested - using the simple text content)
+            // Send DM to User
             try {
                 const creator = await client.users.fetch(ticket.user);
                 await creator.send({
@@ -537,15 +550,23 @@ client.on('interactionCreate', async interaction => {
 });
 
 // ===================
-// TICKET CREATION FUNCTION
+// TICKET CREATION FUNCTION (UPDATED NAMING LOGIC)
 // ===================
 async function createTicketChannel(user, categoryKey, subtopicKey, interaction) {
     const guild = interaction.guild;
     const cat = categories[categoryKey];
-    const ticketNumber = Object.keys(tickets).length + 1;
-    const safeCatName = cat.name.toLowerCase().replace(/[^a-z0-9]/gi, '').substring(0, 5);
-    const safeUsername = user.username.replace(/[^a-z0-9]/gi, '').toLowerCase();
-    const name = `${safeCatName}-${safeUsername}-t${ticketNumber}`.toLowerCase();
+    
+    // Get and increment the counter for this category
+    if (!tickets.counters[categoryKey]) {
+        tickets.counters[categoryKey] = 1;
+    }
+    const ticketNumber = tickets.counters[categoryKey];
+    
+    // Format the number to be three digits (001, 010, 100)
+    const paddedNumber = ticketNumber.toString().padStart(3, '0');
+
+    // New name format: category-001
+    const name = `${categoryKey}-${paddedNumber}`; 
 
     try {
         const overwrites = [
@@ -582,7 +603,9 @@ async function createTicketChannel(user, categoryKey, subtopicKey, interaction) 
         const roleMention = cat.role ? `<@&${cat.role}>` : '@here';
         await channel.send({ content: `${roleMention} | <@${user.id}>`, embeds: [embed], components: [row] });
 
+        // Store ticket data and increment the counter
         tickets[channel.id] = { user: user.id, category: categoryKey, subtopic: subtopicKey || null, claimed: null, closed: false, openTime: Date.now() };
+        tickets.counters[categoryKey]++;
         saveTickets();
 
         await interaction.editReply({ content: `Ticket created: ${channel}`, components: [] });
@@ -637,9 +660,8 @@ const commands = [
 
 client.once('ready', async () => {
     console.log(`${client.user.tag} is online!`);
-    // REMOVED: await client.application.commands.set(commands); 
-    // This line should be commented or removed for normal operation 
-    // to prevent rate limiting, unless you need to update commands.
+    // This line remains commented out for normal, stable operation.
+    // await client.application.commands.set(commands); 
 });
 
 client.login(BOT_TOKEN);
