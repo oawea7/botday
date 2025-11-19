@@ -1,5 +1,5 @@
 // ===================
-// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V17 - FIXED) // FINAL LOGIC AND CODE
+// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V17 - FIXED)
 // ===================
 import {
     Client,
@@ -64,7 +64,7 @@ const IDs = {
 };
 
 // ===================
-// CATEGORIES & SUBTOPICS // <-- MOVED UP TO FIX REFERENCE ERROR
+// CATEGORIES & SUBTOPICS // <-- Moved up to fix ReferenceError
 // ===================
 const categories = {
     moderation: {
@@ -121,10 +121,26 @@ const getSubtopicLabelByKey = (categoryKey, subtopicKey) => {
 }
 
 // ===================
-// TICKET STORAGE
+// TICKET STORAGE <-- Updated for safe JSON parsing
 // ===================
-const ticketDataPath = './ticketData.json'; // <-- FIXED FILENAME
-let tickets = fs.existsSync(ticketDataPath) ? JSON.parse(fs.readFileSync(ticketDataPath, 'utf-8')) : {};
+const ticketDataPath = './ticketData.json';
+let tickets = {};
+
+if (fs.existsSync(ticketDataPath)) {
+    try {
+        const fileContent = fs.readFileSync(ticketDataPath, 'utf-8');
+        // Only attempt to parse if the file content is not empty or just whitespace
+        if (fileContent.trim().length > 0) {
+            tickets = JSON.parse(fileContent);
+        } else {
+            console.warn('ticketData.json exists but is empty. Initializing as new object.');
+        }
+    } catch (error) {
+        console.error('CRITICAL: Failed to parse ticketData.json. File is corrupt. Initializing as new object.', error);
+        // If parsing fails, tickets remains the default empty object {}
+    }
+}
+
 
 // Initialize counters if they don't exist
 if (!tickets.counters) {
@@ -202,7 +218,7 @@ client.on('messageCreate', async message => {
             const embed = new EmbedBuilder()
                 .setColor(0xFFA500)
                 .setTitle('<:verified:1406645489381806090> **Adalea Support**')
-                .setDescription("Welcome to Adalea's Support channel! Please select the category that best fits your needs before opening a ticket. The corresponding team will respond to your ticket in a timely manner. Thank you for your patience and respect!")
+                .setDescription("Welcome to Adalea's Support channel! Please select the category that best fits your needs before opening a ticket. The corresponding team will assist you shortly. Thank you for your patience and respect!")
                 .setImage('https://cdn.discordapp.com/attachments/1402405357812187287/1403398794695016470/support3.png');
 
             const row = new ActionRowBuilder().addComponents(
@@ -659,8 +675,8 @@ const commands = [
 ];
 
 client.once('ready', async () => {
-    console.log(`${client.user.tag} is online!`);
-    // This line remains commented out for normal, stable operation.
+    console.log(`🤖 ${client.user.tag} is online!`);
+    // NOTE: Uncomment the line below to register the slash commands when you first deploy.
     // await client.application.commands.set(commands); 
 });
 
