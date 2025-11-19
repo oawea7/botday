@@ -1,5 +1,5 @@
 // ===================
-// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V17 - FIXED)
+// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V18 - ALL FIXES APPLIED)
 // ===================
 import {
     Client,
@@ -47,7 +47,7 @@ const client = new Client({
 const BOT_TOKEN = process.env.BOT_TOKEN_1;
 
 // ===================
-// ID CONFIGURATION
+// ID CONFIGURATION (VERIFY THESE IDs ARE CORRECT)
 // ===================
 const IDs = {
     // --- YOUR GUILD ID ---
@@ -64,7 +64,7 @@ const IDs = {
 };
 
 // ===================
-// CATEGORIES & SUBTOPICS // <-- Moved up to fix ReferenceError
+// CATEGORIES & SUBTOPICS
 // ===================
 const categories = {
     moderation: {
@@ -462,7 +462,7 @@ client.on('interactionCreate', async interaction => {
                 });
             }
 
-            // Send DM to User (FIXED: Reverted to Embed structure)
+            // Send DM to User (FIXED: Uses the correct Embed + File logic)
             try {
                 const creator = await client.users.fetch(ticket.user);
                 
@@ -580,7 +580,7 @@ client.on('interactionCreate', async interaction => {
 });
 
 // ===================
-// TICKET CREATION FUNCTION (UPDATED NAMING LOGIC)
+// TICKET CREATION FUNCTION
 // ===================
 async function createTicketChannel(user, categoryKey, subtopicKey, interaction) {
     const guild = interaction.guild;
@@ -691,7 +691,7 @@ const commands = [
 client.once('ready', async () => {
     console.log(`🤖 ${client.user.tag} is online!`);
     // NOTE: Uncomment the line below to register the slash commands when you first deploy.
-    // await client.application.commands.set(commands); 
+    await client.application.commands.set(commands); 
 });
 
 client.login(BOT_TOKEN);
