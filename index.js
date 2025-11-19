@@ -1,5 +1,5 @@
 // ===================
-// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V8)
+// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V13) // BUG-FREE COPY
 // ===================
 
 import {
@@ -391,8 +391,8 @@ client.on('interactionCreate', async interaction => {
         try {
             const subtopicLabel = ticket.subtopic ? getSubtopicLabelByKey(ticket.category, ticket.subtopic) : 'N/A';
 
-            // --- TRANSCRIPT ---
-            let transcript = `--- Adalea Ticket Transcript ---\nTicket ID: ${channelId}\nCategory: ${categories[ticket.category]?.name}\nSubtopic: ${subtopicLabel}\nOpened By: ${ticket.user}\nClosed By: ${interaction.user.tag}\nReason: ${reason}\n\n`;
+            // --- TRANSCRIPT GENERATION ---
+            let transcript = `--- Adalea Ticket Transcript ---\nTicket ID: ${channelId}\nCategory: ${categories[ticket.category]?.name}\nSubtopic: ${subtopicLabel}\nOpened By: ${client.users.cache.get(ticket.user)?.tag || ticket.user}\nClosed By: ${interaction.user.tag}\nReason: ${reason}\n\n`;
             
             let allMessages = [];
             let lastId;
@@ -412,8 +412,8 @@ client.on('interactionCreate', async interaction => {
             fs.writeFileSync(transcriptPath, transcript);
             const logChannel = await client.channels.fetch(IDs.transcriptLog).catch(() => null);
 
-            // --- EMBED STYLE (Based on Screenshot) ---
-            const closedEmbed = new EmbedBuilder()
+            // --- 1. DETAILED EMBED FOR USER DM (AS PREVIOUSLY REQUESTED) ---
+            const dmEmbed = new EmbedBuilder()
                 .setColor(0x5A0E0E) // Dark red/brown background
                 .setAuthor({ name: 'Ticket Closed', iconURL: interaction.guild.iconURL() })
                 .addFields(
@@ -424,24 +424,33 @@ client.on('interactionCreate', async interaction => {
                     { name: 'Claimed By', value: ticket.claimed ? `<@${ticket.claimed}>` : 'Unclaimed', inline: true },
                     { name: 'Reason', value: reason, inline: false }
                 );
+            
+            // --- 2. SIMPLE EMBED FOR LOG CHANNEL (CLEAN FORMAT) ---
+            const logEmbed = new EmbedBuilder()
+                .setColor(0x36393F) // Darker gray/blue color for log
+                .setTitle(`Ticket Closed: #${ticketChannel.name}`)
+                .setDescription(`**Ticket User:** <@${ticket.user}>\n**Closed By:** <@${interaction.user.id}>\n**Reason:** ${reason}`)
+                .setFooter({ text: `Ticket ID: ${channelId}` }); // Adding ticket ID to footer
+
 
             // Send to Log
             if (logChannel) {
                 await logChannel.send({
-                    embeds: [closedEmbed],
-                    files: [{ attachment: transcriptPath, name: `transcript-${channelId}.txt` }]
+                    embeds: [logEmbed], // Using the simplified log embed
+                    files: [{ attachment: transcriptPath, name: `transcript-${channelId}.txt` }] 
                 });
             }
 
-            // Send DM to User (Embed + File)
+            // Send DM to User 
             try {
                 const creator = await client.users.fetch(ticket.user);
                 await creator.send({
-                    embeds: [closedEmbed],
-                    files: [{ attachment: transcriptPath, name: `transcript-${channelId}.txt` }]
+                    embeds: [dmEmbed], // Using the detailed DM embed
+                    files: [{ attachment: transcriptPath, name: `transcript-${channelId}.txt` }] 
                 });
-            } catch (e) {
-                console.log('Could not DM ticket creator (DMs closed).');
+            } catch (dmError) {
+                console.warn(`[TICKET ${channelId}] Failed to DM creator (${ticket.user}). They likely have DMs disabled or blocked the bot. Error: ${dmError.message}`);
+                // Continue execution even if DM fails
             }
 
             fs.unlinkSync(transcriptPath);
@@ -627,7 +636,9 @@ const commands = [
 
 client.once('ready', async () => {
     console.log(`${client.user.tag} is online!`);
-    // await client.application.commands.set(commands); // Uncomment to refresh commands
+    // 🛑 IMPORTANT: This line is COMMENTED OUT. The commands are registered, and leaving this commented 
+    // prevents the duplication bug and allows Discord's cache to clear correctly.
+    // await client.application.commands.set(commands); 
 });
 
 client.login(BOT_TOKEN);
