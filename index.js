@@ -121,7 +121,7 @@ const getSubtopicLabelByKey = (categoryKey, subtopicKey) => {
 }
 
 // ===================
-// TICKET STORAGE <-- Updated for safe JSON parsing
+// TICKET STORAGE (Safe Loading Implemented)
 // ===================
 const ticketDataPath = './ticketData.json';
 let tickets = {};
@@ -462,13 +462,27 @@ client.on('interactionCreate', async interaction => {
                 });
             }
 
-            // Send DM to User
+            // Send DM to User (FIXED: Reverted to Embed structure)
             try {
                 const creator = await client.users.fetch(ticket.user);
+                
+                // --- DM EMBED ---
+                const dmEmbed = new EmbedBuilder()
+                    .setColor(0xFFA500)
+                    .setTitle(`✅ Your Ticket Has Been Closed`)
+                    .setDescription(`Your ticket, **#${ticketChannel.name}**, has been closed by **${interaction.user.tag}**.`)
+                    .addFields(
+                        { name: 'Category', value: categories[ticket.category]?.name || 'N/A', inline: true },
+                        { name: 'Subtopic', value: subtopicLabel, inline: true },
+                        { name: 'Closure Reason', value: reason, inline: false }
+                    )
+                    .setFooter({ text: 'Thank you for reaching out to Adalea Support!' });
+                
                 await creator.send({
-                    content: `Your ticket, **${ticketChannel.name}**, has been closed by **${interaction.user.tag}**.\nReason: **${reason}**\nThank you for reaching out to Adalea Support!`,
-                    files: [{ attachment: transcriptPath, name: transcriptFilename }] 
+                    embeds: [dmEmbed], // Send the embed
+                    files: [{ attachment: transcriptPath, name: transcriptFilename }] // Send the transcript
                 });
+
             } catch (dmError) {
                 console.warn(`[TICKET ${channelId}] Failed to DM creator (${ticket.user}). Error: ${dmError.message}`);
             }
