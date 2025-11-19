@@ -1,5 +1,5 @@
 // ===================
-// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V13) // BUG-FREE COPY
+// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V14) // FULLY CLEAN, ONE-TIME REGISTRATION ENABLED
 // ===================
 
 import {
@@ -635,10 +635,11 @@ const commands = [
 ];
 
 client.once('ready', async () => {
-    console.log(`${client.user.tag} is online!`);
-    // 🛑 IMPORTANT: This line is COMMENTED OUT. The commands are registered, and leaving this commented 
-    // prevents the duplication bug and allows Discord's cache to clear correctly.
-    // await client.application.commands.set(commands); 
+    console.log(`${client.user.tag} is online! Attempting final command registration.`);
+    // THIS LINE IS LEFT UNCOMMENTED FOR THIS FINAL DEPLOYMENT.
+    // IT WILL OVERWRITE ALL PREVIOUS BAD REGISTRATIONS.
+    await client.application.commands.set(commands); 
+    console.log('Final commands registered. You may need to restart your Discord client.');
 });
 
 client.login(BOT_TOKEN);
