@@ -1,7 +1,6 @@
 // ===================
-// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V14) // FULLY CLEAN, ONE-TIME REGISTRATION ENABLED
+// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V15) // FINAL LOGIC AND CODE
 // ===================
-
 import {
     Client,
     GatewayIntentBits,
@@ -102,8 +101,6 @@ const categories = {
         subtopics: [
             { key: 'appeal', label: 'Appealing', value: 'Appealing a warning, mute, kick, or server ban.' },
             { key: 'report', label: 'Reporting', value: 'Reporting rule-breaking behaviour within our server.' },
-            { key: 'custom_roles', label: 'Custom Booster Roles', value: 'Inquiries regarding custom roles for server boosters.' },
-            { key: 'other_mod', label: 'Other Mod Enquiry', value: 'Other moderation related enquiries.' }
         ],
     },
     staffing: {
@@ -112,9 +109,8 @@ const categories = {
         role: IDs.staffing,
         emoji: '<:flower_yellow:1437121213796188221>',
         subtopics: [
-            { key: 'staff_report', label: 'Reporting', value: 'Reporting a member of staff, MR, or HR.' },
-            { key: 'applications', label: 'Applications', value: 'Applying for a MR or HR position at Adalea.' }, // Removed Mod Application reference
-            { key: 'other_staffing', label: 'Other Staffing Enquiry', value: 'Other staffing related enquiries.' }
+            { key: 'staff_report', label: 'Reporting', value: 'Reporting a member of staff, Middle Rank, or High Rank.' },
+            { key: 'applications', label: 'Applications', value: 'Applying for a MR or HR position at Adalea.' },
         ],
     },
     pr: {
@@ -125,7 +121,6 @@ const categories = {
         subtopics: [
             { key: 'affiliation', label: 'Affiliation', value: 'Forming a partnership between your group and Adalea.' },
             { key: 'prize_claim', label: 'Prize claim', value: 'Claiming your prize after winning an event.' },
-            { key: 'other_pr', label: 'Other PR Enquiry', value: 'Other public relations related enquiries.' }
         ],
     },
     general: { name: 'General', key: 'general', role: IDs.hr, emoji: '<:flower_blue:1415086940306276424>', subtopics: null },
@@ -167,6 +162,7 @@ function hasCooldown(userId) {
 
 function isStaff(member) {
     if (!member) return false;
+    // Includes all roles that should be able to manage tickets
     const staffRoleIds = [IDs.moderation, IDs.staffing, IDs.pr, IDs.hr, IDs.leadership].filter(id => id);
     return member.roles.cache.some(role => staffRoleIds.includes(role.id));
 }
@@ -317,7 +313,6 @@ client.on('interactionCreate', async interaction => {
 
         if (!ticket) return interaction.reply({ content: 'Ticket data not found. It may have been deleted.', ephemeral: true });
 
-        // Ensure we can fetch channel even after restart
         const ticketChannel = interaction.guild.channels.cache.get(channelId) || await client.channels.fetch(channelId).catch(() => null);
         
         if (!ticketChannel) {
@@ -373,7 +368,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     // ===================
-    // 4. CLOSE MODAL SUBMIT
+    // 4. CLOSE MODAL SUBMIT (REVERTED LOGIC)
     // ===================
     if (interaction.isModalSubmit() && interaction.customId.startsWith('close_modal_')) {
         const channelId = interaction.customId.replace('close_modal_', '');
@@ -404,53 +399,49 @@ client.on('interactionCreate', async interaction => {
             }
             const sorted = allMessages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
             sorted.forEach(msg => {
-                transcript += `[${new Date(msg.createdTimestamp).toLocaleString()}] ${msg.author.tag}: ${msg.content}\n`;
+                transcript += `[${new Date(msg.createdTimestamp).toLocaleString()}] ${msg.author.tag}: ${msg.content || '[No Content]'}\n`;
                 if (msg.attachments.size) msg.attachments.forEach(a => transcript += `[Attachment]: ${a.url}\n`);
             });
 
-            const transcriptPath = `./transcript-${channelId}.txt`;
+            // Use the channel name for the transcript filename (e.g. "moderation-jvloxrt-t1.txt")
+            const transcriptFilename = `${ticketChannel.name}.txt`; 
+            const transcriptPath = `./${transcriptFilename}`;
             fs.writeFileSync(transcriptPath, transcript);
             const logChannel = await client.channels.fetch(IDs.transcriptLog).catch(() => null);
 
-            // --- 1. DETAILED EMBED FOR USER DM (AS PREVIOUSLY REQUESTED) ---
-            const dmEmbed = new EmbedBuilder()
-                .setColor(0x5A0E0E) // Dark red/brown background
-                .setAuthor({ name: 'Ticket Closed', iconURL: interaction.guild.iconURL() })
+            // --- 1. LOG CHANNEL EMBED (Simplified, includes all requested fields) ---
+            const logEmbed = new EmbedBuilder()
+                .setColor(0xFFA500)
+                .setTitle(`🎟️ Ticket Closed: #${ticketChannel.name}`)
                 .addFields(
                     { name: 'Ticket ID', value: `${channelId}`, inline: true },
                     { name: 'Opened By', value: `<@${ticket.user}>`, inline: true },
                     { name: 'Closed By', value: `<@${interaction.user.id}>`, inline: true },
                     { name: 'Open Time', value: `<t:${Math.floor(ticket.openTime / 1000)}:f>`, inline: true },
                     { name: 'Claimed By', value: ticket.claimed ? `<@${ticket.claimed}>` : 'Unclaimed', inline: true },
+                    { name: 'Category', value: categories[ticket.category]?.name || 'N/A', inline: true },
                     { name: 'Reason', value: reason, inline: false }
-                );
-            
-            // --- 2. SIMPLE EMBED FOR LOG CHANNEL (CLEAN FORMAT) ---
-            const logEmbed = new EmbedBuilder()
-                .setColor(0x36393F) // Darker gray/blue color for log
-                .setTitle(`Ticket Closed: #${ticketChannel.name}`)
-                .setDescription(`**Ticket User:** <@${ticket.user}>\n**Closed By:** <@${interaction.user.id}>\n**Reason:** ${reason}`)
-                .setFooter({ text: `Ticket ID: ${channelId}` }); // Adding ticket ID to footer
+                )
+                .setFooter({ text: `Subtopic: ${subtopicLabel}` });
 
 
             // Send to Log
             if (logChannel) {
                 await logChannel.send({
-                    embeds: [logEmbed], // Using the simplified log embed
-                    files: [{ attachment: transcriptPath, name: `transcript-${channelId}.txt` }] 
+                    embeds: [logEmbed],
+                    files: [{ attachment: transcriptPath, name: transcriptFilename }] 
                 });
             }
 
-            // Send DM to User 
+            // Send DM to User (as requested - using the simple text content)
             try {
                 const creator = await client.users.fetch(ticket.user);
                 await creator.send({
-                    embeds: [dmEmbed], // Using the detailed DM embed
-                    files: [{ attachment: transcriptPath, name: `transcript-${channelId}.txt` }] 
+                    content: `Your ticket, **${ticketChannel.name}**, has been closed by **${interaction.user.tag}**.\nReason: **${reason}**\nThank you for reaching out to Adalea Support!`,
+                    files: [{ attachment: transcriptPath, name: transcriptFilename }] 
                 });
             } catch (dmError) {
-                console.warn(`[TICKET ${channelId}] Failed to DM creator (${ticket.user}). They likely have DMs disabled or blocked the bot. Error: ${dmError.message}`);
-                // Continue execution even if DM fails
+                console.warn(`[TICKET ${channelId}] Failed to DM creator (${ticket.user}). Error: ${dmError.message}`);
             }
 
             fs.unlinkSync(transcriptPath);
@@ -462,8 +453,10 @@ client.on('interactionCreate', async interaction => {
 
         } catch (error) {
             console.error('Error closing ticket:', error);
+            // Revert state if close fails
             ticket.closed = false; 
             saveTickets();
+            await interaction.editReply({ content: 'A critical error occurred during closing/transcript process. The ticket remains open.' });
         }
     }
 
@@ -477,14 +470,14 @@ client.on('interactionCreate', async interaction => {
         const channel = interaction.channel;
         const subcommand = interaction.options.getSubcommand();
 
-        if (!channel || !tickets[channel.id]) return interaction.reply({ content: 'Not a ticket channel.', ephemeral: true });
+        if (!channel || !tickets[channel.id]) return interaction.reply({ content: 'This command can only be used in an active ticket channel.', ephemeral: true });
 
         if ((subcommand === 'move' || subcommand === 'rename') && !isStaffMember) {
-            return interaction.reply({ content: 'No permission.', ephemeral: true });
+            return interaction.reply({ content: 'Only staff and leadership can use this command.', ephemeral: true });
         }
 
         if ((subcommand === 'add' || subcommand === 'remove') && !isStaffMember && tickets[channel.id]?.user !== interaction.user.id) {
-            return interaction.reply({ content: 'No permission.', ephemeral: true });
+            return interaction.reply({ content: 'You do not have permission to use this command here.', ephemeral: true });
         }
 
         const user = interaction.options.getUser('user');
@@ -492,16 +485,20 @@ client.on('interactionCreate', async interaction => {
         try {
             if (subcommand === 'add') {
                 await channel.permissionOverwrites.edit(user.id, { ViewChannel: true, SendMessages: true });
-                return interaction.reply({ content: `Added ${user}.` });
+                return interaction.reply({ content: `${user.tag} has been **added** to the ticket.`, ephemeral: false });
             }
             if (subcommand === 'remove') {
                 await channel.permissionOverwrites.edit(user.id, { ViewChannel: false });
-                return interaction.reply({ content: `Removed ${user}.` });
+                return interaction.reply({ content: `${user.tag} has been **removed** from the ticket.`, ephemeral: false });
             }
             if (subcommand === 'move') {
                 const newCategoryKey = interaction.options.getString('category_key');
                 const newCat = getCategoryByKey(newCategoryKey);
-                const oldCat = getCategoryByKey(tickets[channel.id].category);
+                
+                if (!newCat) return interaction.reply({ content: 'Invalid category key.', ephemeral: true });
+
+                const oldCatKey = tickets[channel.id].category;
+                const oldCat = getCategoryByKey(oldCatKey);
 
                 if (oldCat?.role) await channel.permissionOverwrites.edit(oldCat.role, { ViewChannel: false, SendMessages: false });
                 if (newCat.role) await channel.permissionOverwrites.edit(newCat.role, { ViewChannel: true, SendMessages: true });
@@ -513,16 +510,24 @@ client.on('interactionCreate', async interaction => {
 
                 const moveEmbed = new EmbedBuilder()
                     .setColor(0x0099FF)
-                    .setDescription(`ticket moved to **${newCat.name}**.`);
+                    .setDescription(`🎟️ Ticket has been moved by <@${interaction.user.id}> from **${oldCat?.name || 'N/A'}** to **${newCat.name}**.`);
                 
-                const roleMention = newCat.role ? `<@&${newCat.role}>` : '';
-                await interaction.channel.send({ content: `${roleMention}`, embeds: [moveEmbed] });
-                return interaction.reply({ content: 'Ticket moved.', ephemeral: true });
+                const roleMention = newCat.role ? `<@&${newCat.role}>` : '@here';
+                await interaction.channel.send({ content: `${roleMention} | <@${tickets[channel.id].user}>`, embeds: [moveEmbed] });
+                return interaction.reply({ content: `Ticket successfully **moved** to the **${newCat.name}** team.`, ephemeral: true });
             }
             if (subcommand === 'rename') {
                 const newName = interaction.options.getString('name').toLowerCase().replace(/[^a-z0-9-]/g, '');
+                if (!newName) return interaction.reply({ content: 'Invalid new name provided.', ephemeral: true });
+                
                 await channel.setName(newName);
-                return interaction.reply({ content: `Ticket renamed to #${newName}.` });
+                
+                const renameEmbed = new EmbedBuilder()
+                    .setColor(0xFFA500)
+                    .setDescription(`🏷️ Ticket renamed by <@${interaction.user.id}> to **#${newName}**.`);
+                
+                await interaction.channel.send({ embeds: [renameEmbed] });
+                return interaction.reply({ content: `Ticket successfully **renamed** to **#${newName}**.`, ephemeral: true });
             }
         } catch (error) {
             console.error('Slash command error:', error);
@@ -546,12 +551,9 @@ async function createTicketChannel(user, categoryKey, subtopicKey, interaction) 
         const overwrites = [
             { id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
             { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-            // Add Category Role (if exists)
             ...(cat.role ? [{ id: cat.role, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }] : []),
-            // Leadership & Special User ALWAYS see tickets
             { id: IDs.leadership, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
             { id: IDs.special, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-            // Bot
             { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ManageChannels] }
         ];
 
@@ -577,8 +579,7 @@ async function createTicketChannel(user, categoryKey, subtopicKey, interaction) 
             new ButtonBuilder().setLabel('Close').setCustomId(`close_${channel.id}`).setStyle(ButtonStyle.Danger)
         );
 
-        // Only Ping the specific role for this category. Leadership/Special can see it via overwrites but wont be pinged here.
-        const roleMention = cat.role ? `<@&${cat.role}>` : '';
+        const roleMention = cat.role ? `<@&${cat.role}>` : '@here';
         await channel.send({ content: `${roleMention} | <@${user.id}>`, embeds: [embed], components: [row] });
 
         tickets[channel.id] = { user: user.id, category: categoryKey, subtopic: subtopicKey || null, claimed: null, closed: false, openTime: Date.now() };
@@ -635,11 +636,10 @@ const commands = [
 ];
 
 client.once('ready', async () => {
-    console.log(`${client.user.tag} is online! Attempting final command registration.`);
-    // THIS LINE IS LEFT UNCOMMENTED FOR THIS FINAL DEPLOYMENT.
-    // IT WILL OVERWRITE ALL PREVIOUS BAD REGISTRATIONS.
-    await client.application.commands.set(commands); 
-    console.log('Final commands registered. You may need to restart your Discord client.');
+    console.log(`${client.user.tag} is online!`);
+    // REMOVED: await client.application.commands.set(commands); 
+    // This line should be commented or removed for normal operation 
+    // to prevent rate limiting, unless you need to update commands.
 });
 
 client.login(BOT_TOKEN);
