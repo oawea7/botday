@@ -1,5 +1,5 @@
 // ===================
-// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V17) // FINAL LOGIC AND CODE
+// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V17 - FIXED) // FINAL LOGIC AND CODE
 // ===================
 import {
     Client,
@@ -64,42 +64,7 @@ const IDs = {
 };
 
 // ===================
-// TICKET STORAGE
-// ===================
-const ticketDataPath = './tickets.json';
-let tickets = fs.existsSync(ticketDataPath) ? JSON.parse(fs.readFileSync(ticketDataPath, 'utf-8')) : {};
-
-// Initialize counters if they don't exist
-if (!tickets.counters) {
-    tickets.counters = {};
-    // Initialize all category counters to 1
-    Object.keys(categories).forEach(key => {
-        tickets.counters[key] = 1;
-    });
-}
-
-const saveTickets = () => {
-    try {
-        fs.writeFileSync(ticketDataPath, JSON.stringify(tickets, null, 4));
-    } catch (error) {
-        console.error('Failed to save tickets.json:', error);
-    }
-};
-
-// ===================
-// COOLDOWNS
-// ===================
-const cooldowns = {};
-const COOLDOWN_SECONDS = 34;
-
-// ===================
-// STOP/RESUME STATE
-// ===================
-let stoppedCategories = {};
-let stoppedSubtopics = {};
-
-// ===================
-// CATEGORIES & SUBTOPICS
+// CATEGORIES & SUBTOPICS // <-- MOVED UP TO FIX REFERENCE ERROR
 // ===================
 const categories = {
     moderation: {
@@ -154,6 +119,41 @@ const getSubtopicLabelByKey = (categoryKey, subtopicKey) => {
     const category = getCategoryByKey(categoryKey);
     return category?.subtopics?.find(s => s.key === subtopicKey)?.label;
 }
+
+// ===================
+// TICKET STORAGE
+// ===================
+const ticketDataPath = './ticketData.json'; // <-- FIXED FILENAME
+let tickets = fs.existsSync(ticketDataPath) ? JSON.parse(fs.readFileSync(ticketDataPath, 'utf-8')) : {};
+
+// Initialize counters if they don't exist
+if (!tickets.counters) {
+    tickets.counters = {};
+    // Initialize all category counters to 1
+    Object.keys(categories).forEach(key => {
+        tickets.counters[key] = 1;
+    });
+}
+
+const saveTickets = () => {
+    try {
+        fs.writeFileSync(ticketDataPath, JSON.stringify(tickets, null, 4));
+    } catch (error) {
+        console.error('Failed to save ticketData.json:', error);
+    }
+};
+
+// ===================
+// COOLDOWNS
+// ===================
+const cooldowns = {};
+const COOLDOWN_SECONDS = 34;
+
+// ===================
+// STOP/RESUME STATE
+// ===================
+let stoppedCategories = {};
+let stoppedSubtopics = {};
 
 // ===================
 // HELPER FUNCTIONS
