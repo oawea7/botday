@@ -1,5 +1,5 @@
 // ===================
-// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V18 - ALL FIXES APPLIED)
+// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V19 - !ticketchannel PARSING FIX APPLIED)
 // ===================
 import {
     Client,
@@ -292,10 +292,16 @@ client.on('messageCreate', async message => {
         }
 
         const channelId = message.channelId;
-        const [_, categoryKey, userId] = content.split(' '); // Expected format: !ticketchannel <category_key> <user_id>
+        
+        // FIX: Filter out any multiple spaces or empty strings which can cause parsing issues
+        const parts = content.split(/\s+/).filter(p => p.length > 0);
+        // parts should be: ['!ticketchannel', 'staffing', '123456789012345678']
+        const [command, categoryKey, userId] = parts;
+
 
         // 2. Argument Validation
-        if (!categoryKey || !userId) {
+        // The command name itself is parts[0], so we need at least 3 parts total.
+        if (parts.length < 3) {
             const reply = await message.channel.send('Invalid format. Use: `!ticketchannel <category_key> <user_id>` (e.g., `!ticketchannel general 1234567890`).');
             setTimeout(() => reply.delete().catch(() => {}), 5000);
             return;
