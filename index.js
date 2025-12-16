@@ -61,6 +61,9 @@ const IDs = {
     hr: '1402400473344114748', // HR Team Role ID
     transcriptLog: '1437112357787533436',
     ticketCategory: '1437139682361344030',
+    // --- Specific Role ID for !ticketchannel command (Corrected) ---
+    TICKET_REGISTRAR_ROLE_ID: '1402417889826443356', 
+    // ----------------------------------------------------------------
 };
 
 // ===================
@@ -124,27 +127,7 @@ const getSubtopicLabelByKey = (categoryKey, subtopicKey) => {
 // TICKET STORAGE
 // ===================
 const ticketDataPath = './ticketData.json';
-let tickets = {};
-
-if (fs.existsSync(ticketDataPath)) {
-    try {
-        const fileContent = fs.readFileSync(ticketDataPath, 'utf-8');
-        if (fileContent.trim().length > 0) {
-            tickets = JSON.parse(fileContent);
-        } else {
-            console.warn('ticketData.json exists but is empty. Initializing as new object.');
-        }
-    } catch (error) {
-        console.error('CRITICAL: Failed to parse ticketData.json. File is corrupt.', error);
-    }
-}
-
-if (!tickets.counters) {
-    tickets.counters = {};
-    Object.keys(categories).forEach(key => {
-        tickets.counters[key] = 1;
-    });
-}
+let tickets = {}; 
 
 const saveTickets = () => {
     try {
@@ -153,6 +136,40 @@ const saveTickets = () => {
         console.error('Failed to save ticketData.json:', error);
     }
 };
+
+/**
+ * NEW FUNCTION: Loads ticket data from the JSON file on bot startup (Persistence Fix).
+ */
+function loadTickets() {
+    try {
+        if (fs.existsSync(ticketDataPath)) {
+            const fileContent = fs.readFileSync(ticketDataPath, 'utf-8');
+            if (fileContent.trim().length > 0) {
+                // IMPORTANT: Reassign the global 'tickets' variable
+                tickets = JSON.parse(fileContent);
+                // Filter out the counters to get the actual ticket count
+                const ticketCount = Object.keys(tickets).filter(key => key !== 'counters').length;
+                console.log(`Loaded ${ticketCount} active tickets from ticketData.json.`);
+            } else {
+                console.warn('ticketData.json is empty or invalid. Starting fresh.');
+                tickets = {};
+            }
+        }
+    } catch (error) {
+        console.error('CRITICAL: Failed to load/parse ticketData.json. Starting fresh.', error);
+        tickets = {};
+    }
+
+    // Initialize counters if they are missing
+    if (!tickets.counters) {
+        tickets.counters = {};
+        Object.keys(categories).forEach(key => {
+            tickets.counters[key] = 1;
+        });
+        saveTickets(); // Save the initialized counters immediately
+    }
+}
+
 
 // ===================
 // COOLDOWNS & STATE
@@ -192,70 +209,128 @@ function canClaimOrClose(member, userId) {
 }
 
 // ===================
-// MESSAGE COMMAND HANDLER (?supportpanel, etc)
+// MESSAGE COMMAND HANDLER (?supportpanel, !ticketchannel, etc)
 // ===================
 client.on('messageCreate', async message => {
     if (message.author.bot || !message.guild) return;
-    if (!message.content.startsWith('?')) return;
-
-    const [cmd, ...args] = message.content.slice(1).toLowerCase().split(' ');
-    const arg = args.join(' ');
+    
+    const content = message.content;
     const member = message.member;
 
-    const isLeaderOrSpecial = member.roles.cache.has(IDs.leadership) || message.author.id === IDs.special;
+    // --- PREFIX COMMANDS ---
+    if (content.startsWith('?')) {
+        const [cmd, ...args] = content.slice(1).toLowerCase().split(' ');
+        const arg = args.join(' ');
 
-    // SUPPORT PANEL
-    if (cmd === 'supportpanel' && isLeaderOrSpecial) {
-        try {
-            const existing = message.channel.messages.cache.find(m => m.author.id === client.user.id && m.embeds.length);
-            if (existing) await existing.delete().catch(() => {});
+        const isLeaderOrSpecial = member.roles.cache.has(IDs.leadership) || message.author.id === IDs.special;
 
-            const embed = new EmbedBuilder()
-                .setColor(0xFFA500)
-                .setTitle('<:verified:1406645489381806090> **Adalea Support**')
-                .setDescription("Welcome to Adalea's Support channel! Please select the category that best fits your needs before opening a ticket. The corresponding team will assist you shortly. Thank you for your patience and respect!")
-                .setImage('https://cdn.discordapp.com/attachments/1315086065320722492/1449589414857805834/support.png?ex=693f72d8&is=693e2158&hm=d8dfcdcb9481e8c66ff6888e238836fcc0e944d6cded23010267a733c700c83d&');
+        // SUPPORT PANEL
+        if (cmd === 'supportpanel' && isLeaderOrSpecial) {
+            try {
+                const existing = message.channel.messages.cache.find(m => m.author.id === client.user.id && m.embeds.length);
+                if (existing) await existing.delete().catch(() => {});
 
-             const row = new ActionRowBuilder().addComponents(
-                Object.values(categories).map(c =>
-                    new ButtonBuilder()
-                        .setLabel(c.name)
-                        .setCustomId(`category_${c.name.toLowerCase().replace(/\s/g, '-')}`)
-                        .setStyle(ButtonStyle.Primary)
-                        .setEmoji(c.emoji)
-                )
-            );
+                const embed = new EmbedBuilder()
+                    .setColor(0xFFA500)
+                    .setTitle('<:verified:1406645489381806090> **Adalea Support**')
+                    .setDescription("Welcome to Adalea's Support channel! Please select the category that best fits your needs before opening a ticket. The corresponding team will assist you shortly. Thank you for your patience and respect!")
+                    .setImage('https://cdn.discordapp.com/attachments/1315086065320722492/1449589414857805834/support.png?ex=693f72d8&is=693e2158&hm=d8dfcdcb9481e8c66ff6888e238836fcc0e944d6cded23010267a733c700c83d&');
 
-            await message.channel.send({ embeds: [embed], components: [row] });
-            await message.delete().catch(() => {});
-        } catch (error) {
-            console.error('Error in ?supportpanel:', error);
+                const row = new ActionRowBuilder().addComponents(
+                    Object.values(categories).map(c =>
+                        new ButtonBuilder()
+                            .setLabel(c.name)
+                            .setCustomId(`category_${c.name.toLowerCase().replace(/\s/g, '-')}`)
+                            .setStyle(ButtonStyle.Primary)
+                            .setEmoji(c.emoji)
+                    )
+                );
+
+                await message.channel.send({ embeds: [embed], components: [row] });
+                await message.delete().catch(() => {});
+            } catch (error) {
+                console.error('Error in ?supportpanel:', error);
+            }
+        }
+
+        // STOP/RESUME
+        if ((cmd === 'stop' || cmd === 'resume') && isLeaderOrSpecial) {
+            if (!arg) return message.channel.send('Specify a category key or subtopic key.');
+            try {
+                if (arg.includes('-')) {
+                    const [cat, subKey] = arg.split('-');
+                    const subtopicObject = categories[cat]?.subtopics?.find(s => s.key === subKey);
+                    if (!subtopicObject) return message.channel.send('Subtopic key not found.');
+                    
+                    const subtopicValue = subtopicObject.value;
+                    if (cmd === 'stop') stoppedSubtopics[`${cat}_${subtopicValue}`] = true;
+                    else delete stoppedSubtopics[`${cat}_${subtopicValue}`];
+                    
+                    return message.channel.send(`Subtopic **${subtopicObject.label}** ${cmd === 'stop' ? 'stopped' : 'resumed'}.`);
+                } else {
+                    if (!categories[arg]) return message.channel.send('Category key not found.');
+                    if (cmd === 'stop') stoppedCategories[arg] = true;
+                    else delete stoppedCategories[arg];
+                    return message.channel.send(`Category **${arg}** ${cmd === 'stop' ? 'stopped' : 'resumed'}.`);
+                }
+            } catch (error) {
+                console.error('Error in ?stop/resume:', error);
+            }
         }
     }
 
-    // STOP/RESUME
-    if ((cmd === 'stop' || cmd === 'resume') && isLeaderOrSpecial) {
-        if (!arg) return message.channel.send('Specify a category key or subtopic key.');
-        try {
-            if (arg.includes('-')) {
-                const [cat, subKey] = arg.split('-');
-                const subtopicObject = categories[cat]?.subtopics?.find(s => s.key === subKey);
-                if (!subtopicObject) return message.channel.send('Subtopic key not found.');
-                
-                const subtopicValue = subtopicObject.value;
-                if (cmd === 'stop') stoppedSubtopics[`${cat}_${subtopicValue}`] = true;
-                else delete stoppedSubtopics[`${cat}_${subtopicValue}`];
-                
-                return message.channel.send(`Subtopic **${subtopicObject.label}** ${cmd === 'stop' ? 'stopped' : 'resumed'}.`);
-            } else {
-                if (!categories[arg]) return message.channel.send('Category key not found.');
-                if (cmd === 'stop') stoppedCategories[arg] = true;
-                else delete stoppedCategories[arg];
-                return message.channel.send(`Category **${arg}** ${cmd === 'stop' ? 'stopped' : 'resumed'}.`);
-            }
-        } catch (error) {
-            console.error('Error in ?stop/resume:', error);
+
+    // --- !ticketchannel COMMAND (Manual Registration) ---
+    if (content.startsWith('!ticketchannel')) {
+        await message.delete().catch(() => {}); // Delete message immediately (1/3)
+
+        // 1. Authorization Check (Checks if the member has the specific Role ID)
+        if (!message.member.roles.cache.has(IDs.TICKET_REGISTRAR_ROLE_ID)) {
+            const reply = await message.channel.send(`You do not have permission to run this command. Only members with the required role (<@&${IDs.TICKET_REGISTRAR_ROLE_ID}>) can.`);
+            setTimeout(() => reply.delete().catch(() => {}), 5000); // Delete reply after 5s (2/3)
+            return;
         }
+
+        const channelId = message.channelId;
+        const [_, categoryKey, userId] = content.split(' '); // Expected format: !ticketchannel <category_key> <user_id>
+
+        // 2. Argument Validation
+        if (!categoryKey || !userId) {
+            const reply = await message.channel.send('Invalid format. Use: `!ticketchannel <category_key> <user_id>` (e.g., `!ticketchannel general 1234567890`).');
+            setTimeout(() => reply.delete().catch(() => {}), 5000);
+            return;
+        }
+
+        const category = getCategoryByKey(categoryKey);
+        if (!category) {
+            const reply = await message.channel.send(`Invalid category key: \`${categoryKey}\`. Valid keys are: ${Object.keys(categories).join(', ')}.`);
+            setTimeout(() => reply.delete().catch(() => {}), 5000);
+            return;
+        }
+
+        // 3. Register Ticket
+        if (tickets[channelId]) {
+            const reply = await message.channel.send('This channel is already registered as an active ticket.');
+            setTimeout(() => reply.delete().catch(() => {}), 5000);
+            return;
+        }
+
+        // Ensure counter exists for the category being registered
+        if (!tickets.counters[categoryKey]) tickets.counters[categoryKey] = 1;
+        
+        // Register the channel in the tickets storage
+        tickets[channelId] = { 
+            user: userId, 
+            category: categoryKey, 
+            subtopic: null, 
+            claimed: null, 
+            closed: false, 
+            openTime: Date.now() 
+        };
+        saveTickets();
+        
+        const reply = await message.channel.send(`✅ Channel **#${message.channel.name}** successfully registered as a **${category.name}** ticket for <@${userId}>.`);
+        setTimeout(() => reply.delete().catch(() => {}), 5000); // Delete reply after 5s (3/3)
     }
 });
 
@@ -671,6 +746,9 @@ const commands = [
 ];
 
 client.once('ready', async () => {
+    // --- PERSISTENCE FIX: Load ticket data on startup ---
+    loadTickets(); 
+    // ---------------------------------------------------
     console.log(`🤖 ${client.user.tag} is online!`);
     await client.application.commands.set(commands); 
 });
