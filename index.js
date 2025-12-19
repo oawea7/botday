@@ -16,6 +16,8 @@ import {
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
+    Events,
+    MessageFlags,
 } from 'discord.js';
 import fs from 'fs';
 import express from 'express';
@@ -211,7 +213,7 @@ function canClaimOrClose(member, userId) {
 // ===================
 // MESSAGE COMMAND HANDLER (?supportpanel, !ticketchannel, etc)
 // ===================
-client.on('messageCreate', async message => {
+client.on(Events.MessageCreate, async message => {
     if (message.author.bot || !message.guild) return;
     
     const content = message.content;
@@ -343,14 +345,17 @@ client.on('messageCreate', async message => {
 // =========================================================================================
 // INTERACTION HANDLER
 // =========================================================================================
-client.on('interactionCreate', async interaction => {
+client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isButton() && !interaction.isStringSelectMenu() && !interaction.isChatInputCommand() && !interaction.isModalSubmit()) return;
 
     // ===================
     // 1. CATEGORY BUTTONS
     // ===================
     if (interaction.isButton() && interaction.customId.startsWith('category_')) {
-        await interaction.deferReply({ ephemeral: true });
+        try {
+            await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+        } catch (e) { return console.warn("Interaction expired (Button Error Handled)"); }
+
         try {
             const rawCatName = interaction.customId.replace('category_', '');
             const catKey = Object.keys(categories).find(k => categories[k].name.toLowerCase().replace(/\s/g, '-') === rawCatName);
@@ -391,7 +396,10 @@ client.on('interactionCreate', async interaction => {
     // 2. SUBTOPIC SELECTION
     // ===================
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('subtopic_')) {
-        await interaction.deferUpdate();
+        try {
+            await interaction.deferUpdate();
+        } catch (e) { return console.warn("Interaction expired (Menu Error Handled)"); }
+
         try {
             const catKey = interaction.customId.replace('subtopic_', '');
             const selectedKey = interaction.values[0];
@@ -418,15 +426,15 @@ client.on('interactionCreate', async interaction => {
         
         // --- /CLAIM COMMAND ---
         if (interaction.commandName === 'claim') {
-            if (!tickets[channelId]) return interaction.reply({ content: 'This is not an active ticket channel.', ephemeral: true });
+            if (!tickets[channelId]) return interaction.reply({ content: 'This is not an active ticket channel.', flags: [MessageFlags.Ephemeral] });
 
             // Strict Permission Check: HR, Leadership, Special User only
             if (!canClaimOrClose(member, interaction.user.id)) {
-                return interaction.reply({ content: 'You do not have permission to claim tickets.', ephemeral: true });
+                return interaction.reply({ content: 'You do not have permission to claim tickets.', flags: [MessageFlags.Ephemeral] });
             }
 
             const ticket = tickets[channelId];
-            if (ticket.claimed) return interaction.reply({ content: `Already claimed by <@${ticket.claimed}>.`, ephemeral: true });
+            if (ticket.claimed) return interaction.reply({ content: `Already claimed by <@${ticket.claimed}>.`, flags: [MessageFlags.Ephemeral] });
 
             ticket.claimed = interaction.user.id;
             saveTickets();
@@ -440,15 +448,15 @@ client.on('interactionCreate', async interaction => {
 
         // --- /CLOSE COMMAND ---
         if (interaction.commandName === 'close') {
-            if (!tickets[channelId]) return interaction.reply({ content: 'This is not an active ticket channel.', ephemeral: true });
+            if (!tickets[channelId]) return interaction.reply({ content: 'This is not an active ticket channel.', flags: [MessageFlags.Ephemeral] });
             
             // Strict Permission Check: HR, Leadership, Special User only
             if (!canClaimOrClose(member, interaction.user.id)) {
-                return interaction.reply({ content: 'You do not have permission to close tickets.', ephemeral: true });
+                return interaction.reply({ content: 'You do not have permission to close tickets.', flags: [MessageFlags.Ephemeral] });
             }
 
             const ticket = tickets[channelId];
-            if (ticket.closed) return interaction.reply({ content: 'Ticket is already closing.', ephemeral: true });
+            if (ticket.closed) return interaction.reply({ content: 'Ticket is already closing.', flags: [MessageFlags.Ephemeral] });
 
             // Trigger the Modal
             const modal = new ModalBuilder()
@@ -472,14 +480,14 @@ client.on('interactionCreate', async interaction => {
             const subcommand = interaction.options.getSubcommand();
             const channel = interaction.channel;
 
-            if (!channel || !tickets[channel.id]) return interaction.reply({ content: 'This command can only be used in an active ticket channel.', ephemeral: true });
+            if (!channel || !tickets[channel.id]) return interaction.reply({ content: 'This command can only be used in an active ticket channel.', flags: [MessageFlags.Ephemeral] });
 
             if ((subcommand === 'move' || subcommand === 'rename') && !isStaffMember) {
-                return interaction.reply({ content: 'Only staff and leadership can use this command.', ephemeral: true });
+                return interaction.reply({ content: 'Only staff and leadership can use this command.', flags: [MessageFlags.Ephemeral] });
             }
 
             if ((subcommand === 'add' || subcommand === 'remove') && !isStaffMember && tickets[channel.id]?.user !== interaction.user.id) {
-                return interaction.reply({ content: 'You do not have permission to use this command here.', ephemeral: true });
+                return interaction.reply({ content: 'You do not have permission to use this command here.', flags: [MessageFlags.Ephemeral] });
             }
 
             const user = interaction.options.getUser('user');
@@ -497,7 +505,7 @@ client.on('interactionCreate', async interaction => {
                     const newCategoryKey = interaction.options.getString('category_key');
                     const newCat = getCategoryByKey(newCategoryKey);
                     
-                    if (!newCat) return interaction.reply({ content: 'Invalid category key.', ephemeral: true });
+                    if (!newCat) return interaction.reply({ content: 'Invalid category key.', flags: [MessageFlags.Ephemeral] });
 
                     const oldCatKey = tickets[channel.id].category;
                     const oldCat = getCategoryByKey(oldCatKey);
@@ -516,11 +524,11 @@ client.on('interactionCreate', async interaction => {
                     
                     const roleMention = newCat.role ? `<@&${newCat.role}>` : '@here';
                     await interaction.channel.send({ content: `${roleMention} | <@${tickets[channel.id].user}>`, embeds: [moveEmbed] });
-                    return interaction.reply({ content: `Ticket successfully **moved** to the **${newCat.name}** team.`, ephemeral: true });
+                    return interaction.reply({ content: `Ticket successfully **moved** to the **${newCat.name}** team.`, flags: [MessageFlags.Ephemeral] });
                 }
                 if (subcommand === 'rename') {
                     const newName = interaction.options.getString('name').toLowerCase().replace(/[^a-z0-9-]/g, '');
-                    if (!newName) return interaction.reply({ content: 'Invalid new name provided.', ephemeral: true });
+                    if (!newName) return interaction.reply({ content: 'Invalid new name provided.', flags: [MessageFlags.Ephemeral] });
                     
                     await channel.setName(newName);
                     
@@ -529,11 +537,11 @@ client.on('interactionCreate', async interaction => {
                         .setDescription(`🏷️ Ticket renamed by <@${interaction.user.id}> to **#${newName}**.`);
                     
                     await interaction.channel.send({ embeds: [renameEmbed] });
-                    return interaction.reply({ content: `Ticket successfully **renamed** to **#${newName}**.`, ephemeral: true });
+                    return interaction.reply({ content: `Ticket successfully **renamed** to **#${newName}**.`, flags: [MessageFlags.Ephemeral] });
                 }
             } catch (error) {
                 console.error('Slash command error:', error);
-                interaction.reply({ content: 'Error executing command.', ephemeral: true }).catch(() => {});
+                interaction.reply({ content: 'Error executing command.', flags: [MessageFlags.Ephemeral] }).catch(() => {});
             }
         }
     }
@@ -546,11 +554,14 @@ client.on('interactionCreate', async interaction => {
         const reason = interaction.fields.getTextInputValue('close_reason');
         const ticket = tickets[channelId];
 
-        if (!ticket) return interaction.reply({ content: 'Ticket data not found.', ephemeral: true });
+        if (!ticket) return interaction.reply({ content: 'Ticket data not found.', flags: [MessageFlags.Ephemeral] });
         
         ticket.closed = true;
         saveTickets();
-        await interaction.deferReply({ ephemeral: true });
+        
+        try {
+            await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+        } catch (e) { return console.warn("Modal defer failed."); }
 
         const ticketChannel = interaction.guild.channels.cache.get(channelId) || await client.channels.fetch(channelId).catch(() => null);
 
@@ -751,7 +762,7 @@ const commands = [
     },
 ];
 
-client.once('ready', async () => {
+client.once(Events.ClientReady, async () => {
     // --- PERSISTENCE FIX: Load ticket data on startup ---
     loadTickets(); 
     // ---------------------------------------------------
