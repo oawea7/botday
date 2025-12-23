@@ -25,11 +25,19 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // ===================
-// EXPRESS SETUP FOR RENDER (DO NOT TOUCH)
+// EXPRESS SETUP FOR RENDER (FIXED)
 // ===================
 const app = express();
-app.get('/', (req, res) => res.send('Bot is running'));
-app.listen(process.env.PORT || 3000);
+const port = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+    res.send('Bot is running');
+});
+
+// Explicitly bind to 0.0.0.0 for Render
+app.listen(port, '0.0.0.0', () => {
+    console.log(`🌐 Render HTTP Server running on port ${port}`);
+});
 
 // ===================
 // CLIENT SETUP
