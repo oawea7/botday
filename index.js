@@ -236,9 +236,8 @@ client.on('messageCreate', async message => {
                     .setDescription("Welcome to Adalea's Support channel! Please select the category that best fits your needs before opening a ticket. The corresponding team will assist you shortly. Thank you for your patience and respect!")
                     .setImage('https://cdn.discordapp.com/attachments/1315086065320722492/1449589414857805834/support.png?ex=693f72d8&is=693e2158&hm=d8dfcdcb9481e8c66ff6888e238836fcc0e944d6cded23010267a733c700c83d&');
 
-                const row = new ActionRowBuilder().addComponents(
-                    Object.values(categories).map(c =>
-                        new ButtonBuilder()
+                const buttons = Object.values(categories).map(c => new ButtonBuilder()...);
+const row = new ActionRowBuilder().addComponents(...buttons);
                             .setLabel(c.name)
                             .setCustomId(`category_${c.name.toLowerCase().replace(/\s/g, '-')}`)
                             .setStyle(ButtonStyle.Primary)
