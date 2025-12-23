@@ -1,5 +1,6 @@
 // ===================
-// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V19 - STABILITY FIX)
+// Adalea Tickets v2 Clone - FINAL PRODUCTION FILE (V18 - ALL FIXES APPLIED)
+// PART 1
 // ===================
 import {
     Client,
@@ -20,9 +21,6 @@ import {
 import fs from 'fs';
 import express from 'express';
 import dotenv from 'dotenv';
-setInterval(() => {
-    fetch(`http://localhost:${process.env.PORT || 3000}`).catch(() => {});
-}, 1000 * 60 * 5);
 
 dotenv.config();
 
@@ -32,11 +30,6 @@ dotenv.config();
 const app = express();
 app.get('/', (req, res) => res.send('Bot is running'));
 app.listen(process.env.PORT || 3000);
-
-// ✅ KEEPALIVE (PREVENTS RENDER SLEEP / BUTTON DEATH)
-setInterval(() => {
-    fetch(`http://localhost:${process.env.PORT || 3000}`).catch(() => {});
-}, 1000 * 60 * 5);
 
 // ===================
 // CLIENT SETUP
@@ -112,13 +105,17 @@ const categories = {
 };
 
 // ===================
-// HELPERS
+// HELPER FUNCTIONS
 // ===================
 const getCategoryByKey = (key) => categories[key];
-const getSubtopicValueByKey = (categoryKey, subtopicKey) =>
-    categories[categoryKey]?.subtopics?.find(s => s.key === subtopicKey)?.value;
-const getSubtopicLabelByKey = (categoryKey, subtopicKey) =>
-    categories[categoryKey]?.subtopics?.find(s => s.key === subtopicKey)?.label;
+const getSubtopicValueByKey = (categoryKey, subtopicKey) => {
+    const category = getCategoryByKey(categoryKey);
+    return category?.subtopics?.find(s => s.key === subtopicKey)?.value;
+};
+const getSubtopicLabelByKey = (categoryKey, subtopicKey) => {
+    const category = getCategoryByKey(categoryKey);
+    return category?.subtopics?.find(s => s.key === subtopicKey)?.label;
+};
 
 // ===================
 // TICKET STORAGE
@@ -128,47 +125,80 @@ let tickets = {};
 
 if (fs.existsSync(ticketDataPath)) {
     try {
-        const data = fs.readFileSync(ticketDataPath, 'utf8');
-        tickets = data ? JSON.parse(data) : {};
-    } catch {
-        tickets = {};
+        const fileContent = fs.readFileSync(ticketDataPath, 'utf-8');
+        if (fileContent.trim().length > 0) tickets = JSON.parse(fileContent);
+        else console.warn('ticketData.json exists but is empty. Initializing new object.');
+    } catch (error) {
+        console.error('Failed to parse ticketData.json. File is corrupt.', error);
     }
 }
 
-tickets.counters ??= {};
-Object.keys(categories).forEach(k => tickets.counters[k] ??= 1);
+if (!tickets.counters) {
+    tickets.counters = {};
+    Object.keys(categories).forEach(key => tickets.counters[key] = 1);
+}
 
-const saveTickets = () =>
-    fs.writeFileSync(ticketDataPath, JSON.stringify(tickets, null, 4));
+const saveTickets = () => {
+    try { fs.writeFileSync(ticketDataPath, JSON.stringify(tickets, null, 4)); }
+    catch (error) { console.error('Failed to save ticketData.json:', error); }
+};
 
 // ===================
 // COOLDOWNS & STATE
 // ===================
 const cooldowns = {};
 const COOLDOWN_SECONDS = 34;
+let stoppedCategories = {};
+let stoppedSubtopics = {};
 
-const hasCooldown = (id) =>
-    cooldowns[id] && Date.now() - cooldowns[id] < COOLDOWN_SECONDS * 1000;
+function isCategoryStopped(categoryKey) { return stoppedCategories[categoryKey] === true; }
+function isSubtopicStopped(categoryKey, subtopicKey) {
+    const subtopicValue = getSubtopicValueByKey(categoryKey, subtopicKey);
+    return stoppedSubtopics[`${categoryKey}_${subtopicValue}`] === true;
+}
+function hasCooldown(userId) {
+    if (!cooldowns[userId]) return false;
+    return Date.now() - cooldowns[userId] < COOLDOWN_SECONDS * 1000;
+}
+
+// STAFF CHECKS
+function isStaff(member) {
+    if (!member) return false;
+    const staffRoleIds = [IDs.moderation, IDs.staffing, IDs.pr, IDs.hr, IDs.leadership].filter(id => id);
+    return member.roles.cache.some(role => staffRoleIds.includes(role.id));
+}
+function canClaimOrClose(member, userId) {
+    if (userId === IDs.special) return true;
+    if (!member) return false;
+    return member.roles.cache.has(IDs.leadership) || member.roles.cache.has(IDs.hr);
+}// ===================
+// PART 2
+// ===================
 
 // ===================
-// MESSAGE COMMAND HANDLER
+// MESSAGE COMMAND HANDLER (?supportpanel, ?stop, ?resume)
 // ===================
 client.on('messageCreate', async message => {
     if (message.author.bot || !message.guild) return;
     if (!message.content.startsWith('?')) return;
 
-    const [cmd] = message.content.slice(1).toLowerCase().split(' ');
+    const [cmd, ...args] = message.content.slice(1).toLowerCase().split(' ');
+    const arg = args.join(' ');
     const member = message.member;
-    const isLeaderOrSpecial =
-        member.roles.cache.has(IDs.leadership) ||
-        message.author.id === IDs.special;
 
+    const isLeaderOrSpecial = member.roles.cache.has(IDs.leadership) || message.author.id === IDs.special;
+
+    // --- SUPPORT PANEL ---
     if (cmd === 'supportpanel' && isLeaderOrSpecial) {
         try {
+            const existing = message.channel.messages.cache.find(m => m.author.id === client.user.id && m.embeds.length);
+            if (existing) await existing.delete().catch(() => {});
+
             const embed = new EmbedBuilder()
                 .setColor(0xFFA500)
-                .setTitle('Adalea Support')
-                .setDescription('Select a category below.');
+                .setTitle('<:verified:1406645489381806090> **Adalea Support**')
+                .setDescription("Welcome to Adalea's Support channel! Please select the category that best fits your needs before opening a ticket. The corresponding team will assist you shortly. Thank you for your patience and respect!")
+                .setImage('https://cdn.discordapp.com/attachments/1315086065320722492/1449589414857805834/support.png?ex=693f72d8&is=693e2158&hm=d8dfcdcb9481e8c66ff6888e238836fcc0e944d6cded23010267a733c700c83d&');
 
             const row = new ActionRowBuilder().addComponents(
                 Object.values(categories).map(c =>
@@ -182,435 +212,482 @@ client.on('messageCreate', async message => {
 
             await message.channel.send({ embeds: [embed], components: [row] });
             await message.delete().catch(() => {});
-        } catch (e) {
-            console.error(e);
+        } catch (error) {
+            console.error('Error in ?supportpanel:', error);
+        }
+    }
+
+    // --- STOP / RESUME ---
+    if ((cmd === 'stop' || cmd === 'resume') && isLeaderOrSpecial) {
+        if (!arg) return message.channel.send('Specify a category key or subtopic key.');
+        try {
+            if (arg.includes('-')) {
+                const [cat, subKey] = arg.split('-');
+                const subtopicObject = categories[cat]?.subtopics?.find(s => s.key === subKey);
+                if (!subtopicObject) return message.channel.send('Subtopic key not found.');
+                
+                const subtopicValue = subtopicObject.value;
+                if (cmd === 'stop') stoppedSubtopics[`${cat}_${subtopicValue}`] = true;
+                else delete stoppedSubtopics[`${cat}_${subtopicValue}`];
+                
+                return message.channel.send(`Subtopic **${subtopicObject.label}** ${cmd === 'stop' ? 'stopped' : 'resumed'}.`);
+            } else {
+                if (!categories[arg]) return message.channel.send('Category key not found.');
+                if (cmd === 'stop') stoppedCategories[arg] = true;
+                else delete stoppedCategories[arg];
+                return message.channel.send(`Category **${arg}** ${cmd === 'stop' ? 'stopped' : 'resumed'}.`);
+            }
+        } catch (error) {
+            console.error('Error in ?stop/resume:', error);
         }
     }
 });
 
-// =========================================================================================
-// INTERACTION HANDLER (SAFE / CRASH-PROOF)
-// =========================================================================================
+// ===================
+// INTERACTION HANDLER
+// ===================
 client.on('interactionCreate', async interaction => {
-    try {        // ===================
-        // 1. CATEGORY BUTTONS
-        // ===================
-        if (interaction.isButton() && interaction.customId.startsWith('category_')) {
-            if (!interaction.deferred && !interaction.replied) {
-                await interaction.deferReply({ ephemeral: true });
-            }
+    if (!interaction.isButton() && !interaction.isStringSelectMenu() && !interaction.isChatInputCommand() && !interaction.isModalSubmit()) return;
 
+    // ===================
+    // CATEGORY BUTTONS
+    // ===================
+    if (interaction.isButton() && interaction.customId.startsWith('category_')) {
+        await interaction.deferReply({ ephemeral: true });
+        try {
             const rawCatName = interaction.customId.replace('category_', '');
-            const catKey = Object.keys(categories).find(
-                k => categories[k].name.toLowerCase().replace(/\s/g, '-') === rawCatName
-            );
+            const catKey = Object.keys(categories).find(k => categories[k].name.toLowerCase().replace(/\s/g, '-') === rawCatName);
 
-            if (!catKey) {
-                return interaction.editReply({ content: 'Category not found.' }).catch(() => {});
-            }
-
-            if (hasCooldown(interaction.user.id)) {
-                return interaction.editReply({
-                    content: `You are on cooldown. Please wait ${COOLDOWN_SECONDS} seconds.`
-                }).catch(() => {});
-            }
+            if (!catKey) return interaction.editReply({ content: 'Category not found.' });
+            if (isCategoryStopped(catKey)) return interaction.editReply({ content: 'This category is currently stopped.' });
 
             const category = categories[catKey];
 
             if (category.subtopics) {
+                const menuOptions = category.subtopics.map(s => ({
+                    label: s.label.substring(0, 100),
+                    value: s.key.substring(0, 100),
+                    description: s.value.substring(0, 100)
+                }));
+
                 const menu = new ActionRowBuilder().addComponents(
                     new StringSelectMenuBuilder()
                         .setCustomId(`subtopic_${catKey}`)
                         .setPlaceholder('Select the issue')
-                        .addOptions(
-                            category.subtopics.map(s => ({
-                                label: s.label.substring(0, 100),
-                                value: s.key.substring(0, 100),
-                                description: s.value.substring(0, 100),
-                            }))
-                        )
+                        .addOptions(menuOptions)
                 );
-
-                return interaction.editReply({
-                    content: 'Please select a subtopic.',
-                    components: [menu],
-                }).catch(() => {});
+                return interaction.editReply({ content: 'Please select a subtopic for your ticket.', components: [menu] });
             }
+
+            if (hasCooldown(interaction.user.id))
+                return interaction.editReply({ content: `You are on cooldown. Please wait ${COOLDOWN_SECONDS} seconds.` });
 
             cooldowns[interaction.user.id] = Date.now();
-            return createTicketChannel(interaction.user, catKey, null, interaction);
+            await createTicketChannel(interaction.user, catKey, null, interaction);
+        } catch (error) {
+            console.error('Error in category button:', error);
+            interaction.editReply({ content: 'An error occurred.' }).catch(() => {});
         }
+    }
 
-        // ===================
-        // 2. SUBTOPIC SELECT
-        // ===================
-        if (interaction.isStringSelectMenu() && interaction.customId.startsWith('subtopic_')) {
-            if (!interaction.deferred && !interaction.replied) {
-                await interaction.deferUpdate();
-            }
-
+    // ===================
+    // SUBTOPIC SELECTION
+    // ===================
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('subtopic_')) {
+        await interaction.deferUpdate();
+        try {
             const catKey = interaction.customId.replace('subtopic_', '');
-            const subtopicKey = interaction.values[0];
+            const selectedKey = interaction.values[0];
 
-            if (hasCooldown(interaction.user.id)) {
-                return interaction.editReply({
-                    content: `You are on cooldown. Please wait ${COOLDOWN_SECONDS} seconds.`,
-                    components: [],
-                }).catch(() => {});
-            }
+            if (isSubtopicStopped(catKey, selectedKey)) return interaction.editReply({ content: 'This subtopic is currently stopped.', components: [] });
+
+            if (hasCooldown(interaction.user.id))
+                return interaction.editReply({ content: `You are on cooldown. Please wait ${COOLDOWN_SECONDS} seconds.`, components: [] });
 
             cooldowns[interaction.user.id] = Date.now();
-            return createTicketChannel(interaction.user, catKey, subtopicKey, interaction);
-        }
-
-        // ===================
-        // 3. SLASH COMMANDS
-        // ===================
-        if (interaction.isChatInputCommand()) {
-            const channelId = interaction.channelId;
-            const member = interaction.member;
-
-            // --- /CLAIM ---
-            if (interaction.commandName === 'claim') {
-                if (!tickets[channelId]) {
-                    return interaction.reply({
-                        content: 'This is not an active ticket channel.',
-                        ephemeral: true,
-                    });
-                }
-
-                if (
-                    !member.roles.cache.has(IDs.leadership) &&
-                    !member.roles.cache.has(IDs.hr) &&
-                    interaction.user.id !== IDs.special
-                ) {
-                    return interaction.reply({
-                        content: 'You do not have permission to claim tickets.',
-                        ephemeral: true,
-                    });
-                }
-
-                if (tickets[channelId].claimed) {
-                    return interaction.reply({
-                        content: `Already claimed by <@${tickets[channelId].claimed}>.`,
-                        ephemeral: true,
-                    });
-                }
-
-                tickets[channelId].claimed = interaction.user.id;
-                saveTickets();
-
-                const embed = new EmbedBuilder()
-                    .setColor(0x32cd32)
-                    .setDescription(`✅ <@${interaction.user.id}> has claimed this ticket.`);
-
-                return interaction.reply({ embeds: [embed] });
-            }
-
-            // --- /CLOSE ---
-            if (interaction.commandName === 'close') {
-                if (!tickets[channelId]) {
-                    return interaction.reply({
-                        content: 'This is not an active ticket channel.',
-                        ephemeral: true,
-                    });
-                }
-
-                if (
-                    !member.roles.cache.has(IDs.leadership) &&
-                    !member.roles.cache.has(IDs.hr) &&
-                    interaction.user.id !== IDs.special
-                ) {
-                    return interaction.reply({
-                        content: 'You do not have permission to close tickets.',
-                        ephemeral: true,
-                    });
-                }
-
-                const modal = new ModalBuilder()
-                    .setCustomId(`close_modal_${channelId}`)
-                    .setTitle('Close Ticket');
-
-                const reasonInput = new TextInputBuilder()
-                    .setCustomId('close_reason')
-                    .setLabel('Reason for closing')
-                    .setStyle(TextInputStyle.Paragraph)
-                    .setRequired(true);
-
-                modal.addComponents(
-                    new ActionRowBuilder().addComponents(reasonInput)
-                );
-
-                return interaction.showModal(modal);
-            }
-
-            // --- /TICKET SUBCOMMANDS ---
-            if (interaction.commandName === 'ticket') {
-                const subcommand = interaction.options.getSubcommand();
-                const channel = interaction.channel;
-
-                if (!tickets[channel.id]) {
-                    return interaction.reply({
-                        content: 'This command can only be used in a ticket.',
-                        ephemeral: true,
-                    });
-                }
-
-                const user = interaction.options.getUser('user');
-
-                try {
-                    if (subcommand === 'add') {
-                        await channel.permissionOverwrites.edit(user.id, {
-                            ViewChannel: true,
-                            SendMessages: true,
-                        });
-                        return interaction.reply({
-                            content: `${user.tag} added to the ticket.`,
-                        });
-                    }
-
-                    if (subcommand === 'remove') {
-                        await channel.permissionOverwrites.edit(user.id, {
-                            ViewChannel: false,
-                        });
-                        return interaction.reply({
-                            content: `${user.tag} removed from the ticket.`,
-                        });
-                    }
-                } catch (e) {
-                    console.error(e);
-                    return interaction.reply({
-                        content: 'Error executing command.',
-                        ephemeral: true,
-                    }).catch(() => {});
-                }
-            }
-        }
-
-    } catch (error) {
-        console.error('INTERACTION ERROR:', error);
-        if (interaction.deferred || interaction.replied) {
-            interaction.editReply({
-                content: 'An internal error occurred.',
-            }).catch(() => {});
+            await createTicketChannel(interaction.user, catKey, selectedKey, interaction);
+        } catch (error) {
+            console.error('Error in subtopic selection:', error);
+            interaction.editReply({ content: 'An error occurred.', components: [] }).catch(() => {});
         }
     }
 });// ===================
-// 4. CLOSE MODAL SUBMIT
+// PART 3
+// ===================
+
+// ===================
+// SLASH COMMANDS HANDLER
 // ===================
 client.on('interactionCreate', async interaction => {
-    if (!interaction.isModalSubmit()) return;
-    if (!interaction.customId.startsWith('close_modal_')) return;
+    if (!interaction.isChatInputCommand() && !interaction.isModalSubmit()) return;
 
-    const channelId = interaction.customId.replace('close_modal_', '');
-    const reason = interaction.fields.getTextInputValue('close_reason');
-    const ticket = tickets[channelId];
+    const channelId = interaction.channelId;
+    const member = interaction.member;
 
-    if (!ticket) {
-        return interaction.reply({
-            content: 'Ticket data not found.',
-            ephemeral: true,
-        });
-    }
+    // --- /CLAIM COMMAND ---
+    if (interaction.isChatInputCommand() && interaction.commandName === 'claim') {
+        if (!tickets[channelId]) return interaction.reply({ content: 'This is not an active ticket channel.', ephemeral: true });
 
-    ticket.closed = true;
-    saveTickets();
-
-    await interaction.deferReply({ ephemeral: true });
-
-    const ticketChannel =
-        interaction.guild.channels.cache.get(channelId) ||
-        await interaction.guild.channels.fetch(channelId).catch(() => null);
-
-    try {
-        const subtopicLabel = ticket.subtopic
-            ? getSubtopicLabelByKey(ticket.category, ticket.subtopic)
-            : 'N/A';
-
-        // ===== TRANSCRIPT =====
-        let transcript =
-            `--- Adalea Ticket Transcript ---\n` +
-            `Ticket ID: ${channelId}\n` +
-            `Category: ${categories[ticket.category]?.name}\n` +
-            `Subtopic: ${subtopicLabel}\n` +
-            `Opened By: ${ticket.user}\n` +
-            `Closed By: ${interaction.user.tag}\n` +
-            `Reason: ${reason}\n\n`;
-
-        let messages = [];
-        let lastId;
-
-        while (true) {
-            const fetched = await ticketChannel.messages.fetch({
-                limit: 100,
-                before: lastId,
-            });
-            messages.push(...fetched.values());
-            if (fetched.size < 100) break;
-            lastId = fetched.last().id;
+        if (!canClaimOrClose(member, interaction.user.id)) {
+            return interaction.reply({ content: 'You do not have permission to claim tickets.', ephemeral: true });
         }
 
-        messages
-            .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-            .forEach(msg => {
+        const ticket = tickets[channelId];
+        if (ticket.claimed) return interaction.reply({ content: `Already claimed by <@${ticket.claimed}>.`, ephemeral: true });
+
+        ticket.claimed = interaction.user.id;
+        saveTickets();
+
+        const claimEmbed = new EmbedBuilder()
+            .setColor(0x32CD32)
+            .setDescription(`✅ <@${interaction.user.id}> **has claimed this ticket**.`);
+
+        return interaction.reply({ embeds: [claimEmbed] });
+    }
+
+    // --- /CLOSE COMMAND ---
+    if (interaction.isChatInputCommand() && interaction.commandName === 'close') {
+        if (!tickets[channelId]) return interaction.reply({ content: 'This is not an active ticket channel.', ephemeral: true });
+
+        if (!canClaimOrClose(member, interaction.user.id)) {
+            return interaction.reply({ content: 'You do not have permission to close tickets.', ephemeral: true });
+        }
+
+        const ticket = tickets[channelId];
+        if (ticket.closed) return interaction.reply({ content: 'Ticket is already closing.', ephemeral: true });
+
+        const modal = new ModalBuilder()
+            .setCustomId(`close_modal_${channelId}`)
+            .setTitle('Close Ticket');
+
+        const reasonInput = new TextInputBuilder()
+            .setCustomId('close_reason')
+            .setLabel('Reason for closing')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true);
+
+        modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
+        return interaction.showModal(modal);
+    }
+
+    // --- /TICKET SUBCOMMANDS ---
+    if (interaction.isChatInputCommand() && interaction.commandName === 'ticket') {
+        const isLeaderOrSpecial = member.roles.cache.has(IDs.leadership) || interaction.user.id === IDs.special;
+        const isStaffMember = isStaff(member) || isLeaderOrSpecial;
+        const subcommand = interaction.options.getSubcommand();
+        const channel = interaction.channel;
+
+        if (!channel || !tickets[channel.id]) return interaction.reply({ content: 'This command can only be used in an active ticket channel.', ephemeral: true });
+
+        if ((subcommand === 'move' || subcommand === 'rename') && !isStaffMember) {
+            return interaction.reply({ content: 'Only staff and leadership can use this command.', ephemeral: true });
+        }
+
+        if ((subcommand === 'add' || subcommand === 'remove') && !isStaffMember && tickets[channel.id]?.user !== interaction.user.id) {
+            return interaction.reply({ content: 'You do not have permission to use this command here.', ephemeral: true });
+        }
+
+        const user = interaction.options.getUser('user');
+
+        try {
+            if (subcommand === 'add') {
+                await channel.permissionOverwrites.edit(user.id, { ViewChannel: true, SendMessages: true });
+                return interaction.reply({ content: `${user.tag} has been **added** to the ticket.`, ephemeral: false });
+            }
+            if (subcommand === 'remove') {
+                await channel.permissionOverwrites.edit(user.id, { ViewChannel: false });
+                return interaction.reply({ content: `${user.tag} has been **removed** from the ticket.`, ephemeral: false });
+            }
+            if (subcommand === 'move') {
+                const newCategoryKey = interaction.options.getString('category_key');
+                const newCat = getCategoryByKey(newCategoryKey);
+                
+                if (!newCat) return interaction.reply({ content: 'Invalid category key.', ephemeral: true });
+
+                const oldCatKey = tickets[channel.id].category;
+                const oldCat = getCategoryByKey(oldCatKey);
+
+                if (oldCat?.role) await channel.permissionOverwrites.edit(oldCat.role, { ViewChannel: false, SendMessages: false });
+                if (newCat.role) await channel.permissionOverwrites.edit(newCat.role, { ViewChannel: true, SendMessages: true });
+
+                await channel.setParent(IDs.ticketCategory, { lockPermissions: false });
+                tickets[channel.id].category = newCategoryKey;
+                tickets[channel.id].subtopic = null;
+                saveTickets();
+
+                const moveEmbed = new EmbedBuilder()
+                    .setColor(0x0099FF)
+                    .setDescription(`🎟️ Ticket has been moved by <@${interaction.user.id}> from **${oldCat?.name || 'N/A'}** to **${newCat.name}**.`);
+                
+                const roleMention = newCat.role ? `<@&${newCat.role}>` : '@here';
+                await interaction.channel.send({ content: `${roleMention} | <@${tickets[channel.id].user}>`, embeds: [moveEmbed] });
+                return interaction.reply({ content: `Ticket successfully **moved** to the **${newCat.name}** team.`, ephemeral: true });
+            }
+            if (subcommand === 'rename') {
+                const newName = interaction.options.getString('name').toLowerCase().replace(/[^a-z0-9-]/g, '');
+                if (!newName) return interaction.reply({ content: 'Invalid new name provided.', ephemeral: true });
+                
+                await channel.setName(newName);
+                
+                const renameEmbed = new EmbedBuilder()
+                    .setColor(0xFFA500)
+                    .setDescription(`🏷️ Ticket renamed by <@${interaction.user.id}> to **#${newName}**.`);
+                
+                await interaction.channel.send({ embeds: [renameEmbed] });
+                return interaction.reply({ content: `Ticket successfully **renamed** to **#${newName}**.`, ephemeral: true });
+            }
+        } catch (error) {
+            console.error('Slash command error:', error);
+            interaction.reply({ content: 'Error executing command.', ephemeral: true }).catch(() => {});
+        }
+    }
+
+    // ===================
+    // MODAL SUBMISSION FOR CLOSING TICKET
+    // ===================
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('close_modal_')) {
+        const channelId = interaction.customId.replace('close_modal_', '');
+        const reason = interaction.fields.getTextInputValue('close_reason');
+        const ticket = tickets[channelId];
+
+        if (!ticket) return interaction.reply({ content: 'Ticket data not found.', ephemeral: true });
+        
+        ticket.closed = true;
+        saveTickets();
+        await interaction.deferReply({ ephemeral: true });
+
+        const ticketChannel = interaction.guild.channels.cache.get(channelId) || await client.channels.fetch(channelId).catch(() => null);
+
+        try {
+            const subtopicLabel = ticket.subtopic ? getSubtopicLabelByKey(ticket.category, ticket.subtopic) : 'N/A';
+
+            // --- TRANSCRIPT GENERATION ---
+            let transcript = `--- Adalea Ticket Transcript ---\nTicket ID: ${channelId}\nCategory: ${categories[ticket.category]?.name}\nSubtopic: ${subtopicLabel}\nOpened By: ${client.users.cache.get(ticket.user)?.tag || ticket.user}\nClosed By: ${interaction.user.tag}\nReason: ${reason}\n\n`;
+            
+            let allMessages = [];
+            let lastId;
+            while (true) {
+                const messages = await ticketChannel.messages.fetch({ limit: 100, before: lastId });
+                allMessages.push(...messages.values());
+                if (messages.size < 100) break;
+                lastId = messages.last()?.id;
+            }
+            const sorted = allMessages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+            sorted.forEach(msg => {
                 transcript += `[${new Date(msg.createdTimestamp).toLocaleString()}] ${msg.author.tag}: ${msg.content || '[No Content]'}\n`;
-                msg.attachments.forEach(a => {
-                    transcript += `[Attachment] ${a.url}\n`;
-                });
+                if (msg.attachments.size) msg.attachments.forEach(a => transcript += `[Attachment]: ${a.url}\n`);
             });
 
-        const fileName = `${ticketChannel.name}.txt`;
-        fs.writeFileSync(fileName, transcript);
+            const transcriptFilename = `${ticketChannel.name}.txt`; 
+            const transcriptPath = `./${transcriptFilename}`;
+            fs.writeFileSync(transcriptPath, transcript);
+            const logChannel = await client.channels.fetch(IDs.transcriptLog).catch(() => null);
 
-        const logChannel = await client.channels.fetch(IDs.transcriptLog).catch(() => null);
-
-        if (logChannel) {
-            const embed = new EmbedBuilder()
+            const logEmbed = new EmbedBuilder()
                 .setColor(0xFFA500)
-                .setTitle(`🎟️ Ticket Closed`)
+                .setTitle(`🎟️ Ticket Closed: #${ticketChannel.name}`)
                 .addFields(
-                    { name: 'Ticket', value: ticketChannel.name, inline: true },
+                    { name: 'Ticket ID', value: `${channelId}`, inline: true },
                     { name: 'Opened By', value: `<@${ticket.user}>`, inline: true },
                     { name: 'Closed By', value: `<@${interaction.user.id}>`, inline: true },
-                    { name: 'Reason', value: reason }
-                );
+                    { name: 'Open Time', value: `<t:${Math.floor(ticket.openTime / 1000)}:f>`, inline: true },
+                    { name: 'Claimed By', value: ticket.claimed ? `<@${ticket.claimed}>` : 'Unclaimed', inline: true },
+                    { name: 'Category', value: categories[ticket.category]?.name || 'N/A', inline: true },
+                    { name: 'Reason', value: reason, inline: false }
+                )
+                .setFooter({ text: `Subtopic: ${subtopicLabel}` });
 
-            await logChannel.send({
-                embeds: [embed],
-                files: [{ attachment: fileName, name: fileName }],
-            });
+            if (logChannel) {
+                await logChannel.send({
+                    embeds: [logEmbed],
+                    files: [{ attachment: transcriptPath, name: transcriptFilename }] 
+                });
+            }
+
+            // --- DM TO USER ---
+            try {
+                const creator = await client.users.fetch(ticket.user);
+                
+                const dmEmbed = new EmbedBuilder()
+                    .setColor(0xFFA500)
+                    .setTitle(`✅ Your Ticket Has Been Closed`)
+                    .setDescription(`Your ticket, **#${ticketChannel.name}**, has been closed by **${interaction.user.tag}**.`)
+                    .addFields(
+                        { name: 'Category', value: categories[ticket.category]?.name || 'N/A', inline: true },
+                        { name: 'Subtopic', value: subtopicLabel, inline: true },
+                        { name: 'Closure Reason', value: reason, inline: false }
+                    )
+                    .setFooter({ text: 'Thank you for reaching out to Adalea Support!' });
+                
+                await creator.send({
+                    embeds: [dmEmbed],
+                    files: [{ attachment: transcriptPath, name: transcriptFilename }] 
+                });
+
+            } catch (dmError) {
+                console.warn(`[TICKET ${channelId}] Failed to DM creator (${ticket.user}). Error: ${dmError.message}`);
+            }
+
+            fs.unlinkSync(transcriptPath);
+
+            await interaction.editReply({ content: 'Ticket closed. Deleting channel in 5 seconds...' });
+            setTimeout(() => ticketChannel.delete().catch(() => {}), 5000);
+            delete tickets[channelId];
+            saveTickets();
+
+        } catch (error) {
+            console.error('Error closing ticket:', error);
+            ticket.closed = false; 
+            saveTickets();
+            await interaction.editReply({ content: 'A critical error occurred during closing/transcript process. The ticket remains open.' });
         }
-
-        // ===== DM USER =====
-        try {
-            const user = await client.users.fetch(ticket.user);
-            await user.send({
-                content: 'Your ticket has been closed.',
-                files: [{ attachment: fileName, name: fileName }],
-            });
-        } catch {}
-
-        fs.unlinkSync(fileName);
-
-        await interaction.editReply({
-            content: 'Ticket closed. Deleting channel in 5 seconds.',
-        });
-
-        setTimeout(() => {
-            ticketChannel.delete().catch(() => {});
-        }, 5000);
-
-        delete tickets[channelId];
-        saveTickets();
-
-    } catch (err) {
-        console.error('CLOSE ERROR:', err);
-        ticket.closed = false;
-        saveTickets();
-        await interaction.editReply({
-            content: 'An error occurred while closing the ticket.',
-        }).catch(() => {});
     }
-});
+});// ===================
+// PART 4
+// ===================
 
 // ===================
-// TICKET CREATION
+// TICKET CREATION FUNCTION
 // ===================
-async function createTicketChannel(user, categoryKey, subtopicKey, interaction) {
-    const guild = interaction.guild;
-    const cat = categories[categoryKey];
+async function createTicket(user, categoryKey, subtopicKey = null) {
+    try {
+        const category = getCategoryByKey(categoryKey);
+        if (!category) return null;
 
-    const number = tickets.counters[categoryKey]++;
-    const padded = number.toString().padStart(3, '0');
-    const name = `${categoryKey}-${padded}`;
+        const subtopicLabel = subtopicKey ? getSubtopicLabelByKey(categoryKey, subtopicKey) : null;
+        const ticketName = `ticket-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}-${Date.now()}`;
 
-    const channel = await guild.channels.create({
-        name,
-        type: ChannelType.GuildText,
-        parent: IDs.ticketCategory,
-        permissionOverwrites: [
-            { id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-            { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-            ...(cat.role ? [{ id: cat.role, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }] : []),
-            { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ManageChannels] },
-        ],
-    });
+        const channel = await client.guilds.cache
+            .get(IDs.guild)
+            .channels.create({
+                name: ticketName,
+                type: 0, // GuildText
+                parent: IDs.ticketCategory,
+                permissionOverwrites: [
+                    { id: IDs.everyone, deny: [PermissionsBitField.Flags.ViewChannel] },
+                    { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+                    ...(category.role ? [{ id: category.role, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }] : [])
+                ]
+            });
 
-    const embed = new EmbedBuilder()
-        .setColor(0xFFA500)
-        .setTitle(`${cat.name} Ticket`)
-        .setDescription(`Welcome <@${user.id}>! Please explain your issue.`)
-        .setFooter({ text: `Ticket ID: ${channel.id}` });
+        tickets[channel.id] = {
+            user: user.id,
+            category: categoryKey,
+            subtopic: subtopicKey,
+            openTime: Date.now(),
+            claimed: null,
+            closed: false
+        };
 
-    await channel.send({
-        content: `<@&${cat.role}> | <@${user.id}>`,
-        embeds: [embed],
-    });
+        saveTickets();
 
-    tickets[channel.id] = {
-        user: user.id,
-        category: categoryKey,
-        subtopic: subtopicKey,
-        claimed: null,
-        closed: false,
-        openTime: Date.now(),
-    };
+        const embed = new EmbedBuilder()
+            .setColor(0x0099FF)
+            .setTitle(`🎟️ Ticket Created`)
+            .setDescription(`Hello <@${user.id}>! Your ticket has been created.`)
+            .addFields(
+                { name: 'Category', value: category.name, inline: true },
+                { name: 'Subtopic', value: subtopicLabel || 'N/A', inline: true },
+                { name: 'Support Team', value: category.role ? `<@&${category.role}>` : '@here', inline: false }
+            )
+            .setFooter({ text: 'Use the buttons below to manage your ticket.' });
 
-    saveTickets();
+        const buttons = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Danger)
+            );
 
-    if (interaction.deferred || interaction.replied) {
-        await interaction.editReply({
-            content: `Ticket created: ${channel}`,
-        }).catch(() => {});
+        await channel.send({ content: `${category.role ? `<@&${category.role}>` : '@here'} | <@${user.id}>`, embeds: [embed], components: [buttons] });
+
+        return channel;
+    } catch (error) {
+        console.error('Error creating ticket:', error);
+        return null;
     }
 }
 
 // ===================
-// COMMAND REGISTRATION
+// BUTTON INTERACTIONS
 // ===================
-const commands = [
-    { name: 'claim', description: 'Claim the current ticket.' },
-    { name: 'close', description: 'Close the current ticket.' },
-    {
-        name: 'ticket',
-        description: 'Ticket management.',
-        options: [
-            {
-                name: 'add',
-                description: 'Add a user.',
-                type: ApplicationCommandOptionType.Subcommand,
-                options: [
-                    {
-                        name: 'user',
-                        description: 'User to add.',
-                        type: ApplicationCommandOptionType.User,
-                        required: true,
-                    },
-                ],
-            },
-            {
-                name: 'remove',
-                description: 'Remove a user.',
-                type: ApplicationCommandOptionType.Subcommand,
-                options: [
-                    {
-                        name: 'user',
-                        description: 'User to remove.',
-                        type: ApplicationCommandOptionType.User,
-                        required: true,
-                    },
-                ],
-            },
-        ],
-    },
-];
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isButton()) return;
 
-// ===================
-// READY
-// ===================
-client.once('ready', async () => {
-    console.log(`🤖 ${client.user.tag} is online and stable.`);
-    await client.application.commands.set(commands);
+    const { customId, user, channel } = interaction;
+    const ticket = tickets[channel.id];
+
+    if (!ticket) return interaction.reply({ content: 'This is not a ticket channel.', ephemeral: true });
+
+    // CLAIM BUTTON
+    if (customId === 'claim_ticket') {
+        if (!canClaimOrClose(interaction.member, user.id)) {
+            return interaction.reply({ content: 'You do not have permission to claim this ticket.', ephemeral: true });
+        }
+
+        if (ticket.claimed) return interaction.reply({ content: `Already claimed by <@${ticket.claimed}>.`, ephemeral: true });
+
+        ticket.claimed = user.id;
+        saveTickets();
+
+        const claimEmbed = new EmbedBuilder().setColor(0x32CD32).setDescription(`✅ <@${user.id}> has claimed this ticket.`);
+        await interaction.reply({ embeds: [claimEmbed] });
+        await channel.send({ embeds: [claimEmbed] });
+    }
+
+    // CLOSE BUTTON
+    if (customId === 'close_ticket') {
+        if (!canClaimOrClose(interaction.member, user.id)) {
+            return interaction.reply({ content: 'You do not have permission to close this ticket.', ephemeral: true });
+        }
+
+        const modal = new ModalBuilder()
+            .setCustomId(`close_modal_${channel.id}`)
+            .setTitle('Close Ticket');
+
+        const reasonInput = new TextInputBuilder()
+            .setCustomId('close_reason')
+            .setLabel('Reason for closing')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true);
+
+        modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
+        return interaction.showModal(modal);
+    }
 });
 
-client.login(BOT_TOKEN);
+// ===================
+// COMMAND REGISTRATION
+// ===================
+async function registerCommands() {
+    const commands = [
+        {
+            name: 'ticket',
+            description: 'Manage tickets',
+            options: [
+                { name: 'add', description: 'Add a user to ticket', type: 1, options: [{ name: 'user', description: 'User to add', type: 6, required: true }] },
+                { name: 'remove', description: 'Remove a user from ticket', type: 1, options: [{ name: 'user', description: 'User to remove', type: 6, required: true }] },
+                { name: 'move', description: 'Move ticket to another category', type: 1, options: [{ name: 'category_key', description: 'New category key', type: 3, required: true }] },
+                { name: 'rename', description: 'Rename the ticket channel', type: 1, options: [{ name: 'name', description: 'New ticket name', type: 3, required: true }] }
+            ]
+        },
+        { name: 'claim', description: 'Claim a ticket' },
+        { name: 'close', description: 'Close a ticket' }
+    ];
+
+    await client.application.commands.set(commands);
+    console.log('[INFO] Commands registered.');
+}
+
+// ===================
+// CLIENT READY
+// ===================
+client.once('ready', () => {
+    console.log(`✅ Logged in as ${client.user.tag}`);
+    registerCommands();
+    loadTickets();
+});
+
+// ===================
+// CLIENT LOGIN
+// ===================
+client.login(process.env.TOKEN);
