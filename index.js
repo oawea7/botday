@@ -20,7 +20,9 @@ import {
 import fs from 'fs';
 import express from 'express';
 import dotenv from 'dotenv';
-import fetch from 'node-fetch'; // ✅ ADDED (Render keepalive)
+setInterval(() => {
+    fetch(`http://localhost:${process.env.PORT || 3000}`).catch(() => {});
+}, 1000 * 60 * 5);
 
 dotenv.config();
 
