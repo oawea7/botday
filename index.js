@@ -20,6 +20,7 @@ import {
 } from 'discord.js';
 import fs from 'fs';
 import express from 'express';
+import http from 'http'; // ADDED: Required for Keep-Alive
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -38,6 +39,11 @@ app.get('/', (req, res) => {
 app.listen(port, '0.0.0.0', () => {
     console.log(`🌐 Render HTTP Server running on port ${port}`);
 });
+
+// ADDED: Self-Ping to prevent sleeping
+setInterval(() => {
+    http.get(`http://localhost:${port}`);
+}, 280000); // Pings every 4.5 minutes
 
 // ===================
 // CLIENT SETUP
