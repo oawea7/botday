@@ -126,49 +126,27 @@ const getSubtopicLabelByKey = (categoryKey, subtopicKey) => {
 }
 
 // ===================
-// TICKET STORAGE
+// TICKET STORAGE (MODIFIED TO IN-MEMORY)
 // ===================
-const ticketDataPath = './ticketData.json';
+// const ticketDataPath = './ticketData.json'; // REMOVED FILE PATH
 let tickets = {}; 
 
 const saveTickets = () => {
-    try {
-        fs.writeFileSync(ticketDataPath, JSON.stringify(tickets, null, 4));
-    } catch (error) {
-        console.error('Failed to save ticketData.json:', error);
-    }
+    // FUNCTION EMPTIED: No longer saves to JSON file to prevent errors.
+    // Data is kept in the 'tickets' variable in memory.
 };
 
 /**
- * NEW FUNCTION: Loads ticket data from the JSON file on bot startup (Persistence Fix).
+ * MODIFIED FUNCTION: Sets up the tickets object for In-Memory use.
  */
 function loadTickets() {
-    try {
-        if (fs.existsSync(ticketDataPath)) {
-            const fileContent = fs.readFileSync(ticketDataPath, 'utf-8');
-            if (fileContent.trim().length > 0) {
-                // IMPORTANT: Reassign the global 'tickets' variable
-                tickets = JSON.parse(fileContent);
-                // Filter out the counters to get the actual ticket count
-                const ticketCount = Object.keys(tickets).filter(key => key !== 'counters').length;
-                console.log(`Loaded ${ticketCount} active tickets from ticketData.json.`);
-            } else {
-                console.warn('ticketData.json is empty or invalid. Starting fresh.');
-                tickets = {};
-            }
-        }
-    } catch (error) {
-        console.error('CRITICAL: Failed to load/parse ticketData.json. Starting fresh.', error);
-        tickets = {};
-    }
-
     // Initialize counters if they are missing
     if (!tickets.counters) {
         tickets.counters = {};
         Object.keys(categories).forEach(key => {
             tickets.counters[key] = 1;
         });
-        saveTickets(); // Save the initialized counters immediately
+        console.log('Ticket counters initialized in-memory.');
     }
 }
 
