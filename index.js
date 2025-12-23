@@ -748,4 +748,4 @@ client.once(Events.ClientReady, async () => {
     await client.application.commands.set(commands); 
 });
 
-client.login(BOT_TOKEN_1);
+client.login(BOT_TOKEN);
