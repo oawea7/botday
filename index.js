@@ -139,35 +139,31 @@ const saveTickets = () => {
 };
 
 /**
- * NEW FUNCTION: Loads ticket data from the JSON file on bot startup (Persistence Fix).
+ * Loads ticket data from the JSON file on bot startup.
  */
 function loadTickets() {
     try {
         if (fs.existsSync(ticketDataPath)) {
             const fileContent = fs.readFileSync(ticketDataPath, 'utf-8');
             if (fileContent.trim().length > 0) {
-                // IMPORTANT: Reassign the global 'tickets' variable
                 tickets = JSON.parse(fileContent);
-                // Filter out the counters to get the actual ticket count
                 const ticketCount = Object.keys(tickets).filter(key => key !== 'counters').length;
                 console.log(`Loaded ${ticketCount} active tickets from ticketData.json.`);
             } else {
-                console.warn('ticketData.json is empty or invalid. Starting fresh.');
                 tickets = {};
             }
         }
     } catch (error) {
-        console.error('CRITICAL: Failed to load/parse ticketData.json. Starting fresh.', error);
+        console.error('Failed to load/parse ticketData.json. Starting fresh.', error);
         tickets = {};
     }
 
-    // Initialize counters if they are missing
     if (!tickets.counters) {
         tickets.counters = {};
         Object.keys(categories).forEach(key => {
             tickets.counters[key] = 1;
         });
-        saveTickets(); // Save the initialized counters immediately
+        saveTickets();
     }
 }
 
@@ -196,15 +192,20 @@ function hasCooldown(userId) {
 // Global Staff Check
 function isStaff(member) {
     if (!member) return false;
+    // FIX: Allow Administrators to be considered staff automatically
+    if (member.permissions.has(PermissionsBitField.Flags.Administrator)) return true;
+
     const staffRoleIds = [IDs.moderation, IDs.staffing, IDs.pr, IDs.hr, IDs.leadership].filter(id => id);
     return member.roles.cache.some(role => staffRoleIds.includes(role.id));
 }
 
 // Strict Check for Claim/Close
 function canClaimOrClose(member, userId) {
-    if (userId === IDs.special) return true; // Special User
+    if (userId === IDs.special) return true;
     if (!member) return false;
-    // Checks strictly for Leadership Role or HR Role
+    // FIX: Allow Administrators to claim/close automatically
+    if (member.permissions.has(PermissionsBitField.Flags.Administrator)) return true;
+
     return member.roles.cache.has(IDs.leadership) || member.roles.cache.has(IDs.hr);
 }
 
@@ -221,7 +222,9 @@ client.on('messageCreate', async message => {
     if (content.startsWith('?')) {
         const [cmd, ...args] = content.slice(1).toLowerCase().split(' ');
         const arg = args.join(' ');
-        const isLeaderOrSpecial = member.roles.cache.has(IDs.leadership) || message.author.id === IDs.special;
+        
+        // FIX: Allow Administrators to run these commands even if they don't have the Leadership role
+        const isLeaderOrSpecial = member.permissions.has(PermissionsBitField.Flags.Administrator) || member.roles.cache.has(IDs.leadership) || message.author.id === IDs.special;
 
         // SUPPORT PANEL
         if (cmd === 'supportpanel' && isLeaderOrSpecial) {
@@ -235,11 +238,10 @@ client.on('messageCreate', async message => {
                     .setDescription("Welcome to Adalea's Support channel! Please select the category that best fits your needs before opening a ticket. The corresponding team will assist you shortly. Thank you for your patience and respect!")
                     .setImage('https://cdn.discordapp.com/attachments/1315086065320722492/1449589414857805834/support.png?ex=693f72d8&is=693e2158&hm=d8dfcdcb9481e8c66ff6888e238836fcc0e944d6cded23010267a733c700c83d&');
 
-                // FIX: Corrected button generation loop and ID assignment
                 const buttons = Object.values(categories).map(c => 
                     new ButtonBuilder()
                         .setLabel(c.name)
-                        .setCustomId(`category_${c.key}`) // Use key for stability
+                        .setCustomId(`category_${c.key}`) // Stable ID
                         .setStyle(ButtonStyle.Primary)
                         .setEmoji(c.emoji)
                 );
@@ -285,32 +287,32 @@ client.on('messageCreate', async message => {
 
     // --- !ticketchannel COMMAND (Manual Registration) ---
     if (content.startsWith('!ticketchannel')) {
-        await message.delete().catch(() => {}); // Delete message immediately (1/3)
+        await message.delete().catch(() => {});
 
-        // 1. Authorization Check
-        if (!message.member.roles.cache.has(IDs.TICKET_REGISTRAR_ROLE_ID)) {
-            const reply = await message.channel.send(`You do not have permission to run this command. Only members with the required role (<@&${IDs.TICKET_REGISTRAR_ROLE_ID}>) can.`);
-            setTimeout(() => reply.delete().catch(() => {}), 5000); // Delete reply after 5s (2/3)
+        // 1. Authorization Check (FIX: Added Administrator Bypass)
+        const hasPermission = message.member.roles.cache.has(IDs.TICKET_REGISTRAR_ROLE_ID) || message.member.permissions.has(PermissionsBitField.Flags.Administrator);
+
+        if (!hasPermission) {
+            const reply = await message.channel.send(`You do not have permission to run this command. Required Role: <@&${IDs.TICKET_REGISTRAR_ROLE_ID}>`);
+            setTimeout(() => reply.delete().catch(() => {}), 5000);
             return;
         }
 
         const channelId = message.channelId;
-
-        // FIX: Filter out any multiple spaces or empty strings
         const parts = content.split(/\s+/).filter(p => p.length > 0);
-        // parts should be: ['!ticketchannel', 'staffing', '123456789012345678']
+        // parts: ['!ticketchannel', 'categoryKey', 'userId']
         const [command, categoryKey, userId] = parts;
 
         // 2. Argument Validation
         if (parts.length < 3) {
-            const reply = await message.channel.send('Invalid format. Use: `!ticketchannel <category_key> <user_id>` (e.g., `!ticketchannel general 1234567890`).');
+            const reply = await message.channel.send('Invalid format. Use: `!ticketchannel <category_key> <user_id>`');
             setTimeout(() => reply.delete().catch(() => {}), 5000);
             return;
         }
 
         const category = getCategoryByKey(categoryKey);
         if (!category) {
-            const reply = await message.channel.send(`Invalid category key: \`${categoryKey}\`. Valid keys are: ${Object.keys(categories).join(', ')}.`);
+            const reply = await message.channel.send(`Invalid category key: \`${categoryKey}\`. Valid keys: ${Object.keys(categories).join(', ')}.`);
             setTimeout(() => reply.delete().catch(() => {}), 5000);
             return;
         }
@@ -322,10 +324,8 @@ client.on('messageCreate', async message => {
             return;
         }
 
-        // Ensure counter exists for the category being registered
         if (!tickets.counters[categoryKey]) tickets.counters[categoryKey] = 1;
 
-        // Register the channel in the tickets storage
         tickets[channelId] = {
             user: userId,
             category: categoryKey,
@@ -337,12 +337,12 @@ client.on('messageCreate', async message => {
         saveTickets();
 
         const reply = await message.channel.send(`✅ Channel **#${message.channel.name}** successfully registered as a **${category.name}** ticket for <@${userId}>.`);
-        setTimeout(() => reply.delete().catch(() => {}), 5000); // Delete reply after 5s (3/3)
+        setTimeout(() => reply.delete().catch(() => {}), 5000);
     }
 });
 
 // =========================================================================================
-// INTERACTION HANDLER
+// INTERACTION HANDLER (Buttons & Menus) - PERMANENT LISTENER
 // =========================================================================================
 client.on('interactionCreate', async interaction => {
     if (!interaction.isButton() && !interaction.isStringSelectMenu() && !interaction.isChatInputCommand() && !interaction.isModalSubmit()) return;
@@ -353,10 +353,7 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isButton() && interaction.customId.startsWith('category_')) {
         await interaction.deferReply({ ephemeral: true });
         try {
-            // FIX: Use key directly instead of name logic
             const catKey = interaction.customId.replace('category_', '');
-            
-            // Direct lookup is safer
             const category = categories[catKey];
 
             if (!category) return interaction.editReply({ content: 'Category not found.' });
@@ -425,7 +422,6 @@ client.on('interactionCreate', async interaction => {
         if (interaction.commandName === 'claim') {
             if (!tickets[channelId]) return interaction.reply({ content: 'This is not an active ticket channel.', ephemeral: true });
 
-            // Strict Permission Check: HR, Leadership, Special User only
             if (!canClaimOrClose(member, interaction.user.id)) {
                 return interaction.reply({ content: 'You do not have permission to claim tickets.', ephemeral: true });
             }
@@ -447,7 +443,6 @@ client.on('interactionCreate', async interaction => {
         if (interaction.commandName === 'close') {
             if (!tickets[channelId]) return interaction.reply({ content: 'This is not an active ticket channel.', ephemeral: true });
 
-            // Strict Permission Check: HR, Leadership, Special User only
             if (!canClaimOrClose(member, interaction.user.id)) {
                 return interaction.reply({ content: 'You do not have permission to close tickets.', ephemeral: true });
             }
@@ -455,7 +450,6 @@ client.on('interactionCreate', async interaction => {
             const ticket = tickets[channelId];
             if (ticket.closed) return interaction.reply({ content: 'Ticket is already closing.', ephemeral: true });
 
-            // Trigger the Modal
             const modal = new ModalBuilder()
                 .setCustomId(`close_modal_${channelId}`)
                 .setTitle('Close Ticket');
@@ -472,7 +466,7 @@ client.on('interactionCreate', async interaction => {
 
         // --- SUBCOMMANDS (add, remove, move, rename) ---
         if (interaction.commandName === 'ticket') {
-            const isLeaderOrSpecial = member.roles.cache.has(IDs.leadership) || interaction.user.id === IDs.special;
+            const isLeaderOrSpecial = member.permissions.has(PermissionsBitField.Flags.Administrator) || member.roles.cache.has(IDs.leadership) || interaction.user.id === IDs.special;
             const isStaffMember = isStaff(member) || isLeaderOrSpecial;
             const subcommand = interaction.options.getSubcommand();
             const channel = interaction.channel;
@@ -551,7 +545,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     // ===================
-    // 4. CLOSE MODAL SUBMIT (Triggered by /close)
+    // 4. CLOSE MODAL SUBMIT
     // ===================
     if (interaction.isModalSubmit() && interaction.customId.startsWith('close_modal_')) {
         const channelId = interaction.customId.replace('close_modal_', '');
@@ -597,7 +591,7 @@ client.on('interactionCreate', async interaction => {
 
             const logChannel = await client.channels.fetch(IDs.transcriptLog).catch(() => null);
 
-            // --- 1. LOG CHANNEL EMBED ---
+            // Log Embed
             const logEmbed = new EmbedBuilder()
                 .setColor(0xFFA500)
                 .setTitle(`🎟️ Ticket Closed: #${ticketChannel.name}`)
@@ -605,14 +599,10 @@ client.on('interactionCreate', async interaction => {
                     { name: 'Ticket ID', value: `${channelId}`, inline: true },
                     { name: 'Opened By', value: `<@${ticket.user}>`, inline: true },
                     { name: 'Closed By', value: `<@${interaction.user.id}>`, inline: true },
-                    { name: 'Open Time', value: `<t:${Math.floor(ticket.openTime / 1000)}:f>`, inline: true },
-                    { name: 'Claimed By', value: ticket.claimed ? `<@${ticket.claimed}>` : 'Unclaimed', inline: true },
                     { name: 'Category', value: categories[ticket.category]?.name || 'N/A', inline: true },
                     { name: 'Reason', value: reason, inline: false }
-                )
-                .setFooter({ text: `Subtopic: ${subtopicLabel}` });
+                );
 
-            // Send to Log
             if (logChannel) {
                 await logChannel.send({
                     embeds: [logEmbed],
@@ -620,28 +610,21 @@ client.on('interactionCreate', async interaction => {
                 });
             }
 
-            // Send DM to User
+            // User DM
             try {
                 const creator = await client.users.fetch(ticket.user);
-
-                // --- DM EMBED ---
                 const dmEmbed = new EmbedBuilder()
                     .setColor(0xFFA500)
                     .setTitle(`✅ Your Ticket Has Been Closed`)
                     .setDescription(`Your ticket, **#${ticketChannel.name}**, has been closed by **${interaction.user.tag}**.`)
-                    .addFields(
-                        { name: 'Category', value: categories[ticket.category]?.name || 'N/A', inline: true },
-                        { name: 'Subtopic', value: subtopicLabel, inline: true },
-                        { name: 'Closure Reason', value: reason, inline: false }
-                    )
-                    .setFooter({ text: 'Thank you for reaching out to Adalea Support!' });
+                    .addFields({ name: 'Reason', value: reason, inline: false });
 
                 await creator.send({
                     embeds: [dmEmbed],
                     files: [{ attachment: transcriptPath, name: transcriptFilename }]
                 });
             } catch (dmError) {
-                console.warn(`[TICKET ${channelId}] Failed to DM creator (${ticket.user}). Error: ${dmError.message}`);
+                console.warn(`[TICKET ${channelId}] Failed to DM creator.`);
             }
 
             fs.unlinkSync(transcriptPath);
@@ -656,7 +639,7 @@ client.on('interactionCreate', async interaction => {
             console.error('Error closing ticket:', error);
             ticket.closed = false;
             saveTickets();
-            await interaction.editReply({ content: 'A critical error occurred during closing/transcript process. The ticket remains open.' });
+            await interaction.editReply({ content: 'Critical error closing ticket.' });
         }
     }
 });
@@ -770,11 +753,21 @@ const commands = [
 ];
 
 client.once('ready', async () => {
-    // --- PERSISTENCE FIX: Load ticket data on startup ---
     loadTickets();
-    // ---------------------------------------------------
     console.log(`🤖 ${client.user.tag} is online!`);
     await client.application.commands.set(commands);
+});
+
+// ===================
+// ANTI-CRASH HANDLERS
+// ===================
+process.on('unhandledRejection', (reason, p) => {
+    console.log(' [antiCrash] :: Unhandled Rejection/Catch');
+    console.log(reason, p);
+});
+process.on('uncaughtException', (err, origin) => {
+    console.log(' [antiCrash] :: Uncaught Exception/Catch');
+    console.log(err, origin);
 });
 
 client.login(BOT_TOKEN);
